@@ -16,6 +16,15 @@ secrets on your machine. The plugin talks to Supabase directly with a public
 > **[nobletrading.app](https://nobletrading.app)** — your claim token unlocks
 > the dashboard after checkout.
 
+## Screenshots
+
+Live signals, ranked by edge — with the renko brick chart showing the price
+action behind each signal:
+
+| Dashboard | Renko chart |
+|---|---|
+| ![Talaria dashboard](docs/screenshots/dashboard.png) | ![Talaria renko chart](docs/screenshots/charts.png) |
+
 ---
 
 ## What's in this release (v0.1.0)
