@@ -1226,7 +1226,7 @@ function TalariaDashboard({ config, claim }) {
   // 10-brick renko window for the selected symbol (default = first symbol).
   const activeBrickSym = brickSym || (symbolList[0] || '')
   const bricks = useSupabaseData(config, 'nt_renko_bricks',
-    { select: 'symbol,direction,brick_size,open_price,close_price,high,low,brick_index,ts', order: 'brick_index.desc', limit: '10', symbol: 'eq.' + activeBrickSym },
+    { select: 'symbol,direction,brick_size,open_price,close_price,high,low,brick_index,ts', order: 'session_date.desc,brick_index.desc', limit: '10', symbol: 'eq.' + activeBrickSym },
     connected && !!activeBrickSym)
 
   // Paper portfolio (Precision Pro only) — REST seed + live events.
@@ -1258,7 +1258,7 @@ function TalariaDashboard({ config, claim }) {
   // Long brick series (up to 200) for the Markov card — same symbol as the
   // 10-brick chart window, kept as a separate fetch.
   const brickSeries = useSupabaseData(config, 'nt_renko_bricks',
-    { select: 'symbol,direction,open_price,close_price,high,low,brick_index,ts', order: 'brick_index.desc', limit: '200', symbol: 'eq.' + activeBrickSym },
+    { select: 'symbol,direction,open_price,close_price,high,low,brick_index,ts', order: 'session_date.desc,brick_index.desc', limit: '200', symbol: 'eq.' + activeBrickSym },
     connected && !!activeBrickSym)
 
   // Live Realtime socket (open-tab-only — closed on unmount; the REST polls
