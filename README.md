@@ -86,10 +86,17 @@ done
 `TALARIA_SUPABASE_URL`, `TALARIA_SUPABASE_KEY` (the public anon key from the
 Connect tab), `TALARIA_CLAIM_TOKEN` (from nobletrading.app).
 
-**3. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
+**3. (Optional) Agent skill** — copy the `talaria-client` skill so your
+Hermes agent can answer signal questions:
+
+```bash
+cp -r skills/trading/talaria-client "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
+```
+
+**4. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
 **Talaria** in Settings → Plugins, and open the **Talaria** tab.
 
-**4. Connect** — paste your Supabase URL + claim token (get both from
+**5. Connect** — paste your Supabase URL + claim token (get both from
 **[nobletrading.app](https://nobletrading.app)** after checkout). The
 dashboard unlocks.
 
@@ -106,7 +113,7 @@ dashboard unlocks.
 
 ## Docs
 
-- [CLIENT_SKILL.md](docs/CLIENT_SKILL.md) — what your agent can answer for you
+- [talaria-client skill](skills/trading/talaria-client/SKILL.md) — what your agent can answer for you
 - [OPERATIONS.md](docs/OPERATIONS.md) — operator/deploy notes
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) — repo structure, install details, release checklist
 

@@ -21,7 +21,7 @@ client-facing artifacts so any Hermes user can install them:
 | Cron notifiers | `scripts/talaria_digest.py`, `scripts/talaria_signal_notify.py` | Daily digest + live signal watcher (Hermes cron) |
 | Schema contract | `supabase/migrations/` | Views/tables the plugin reads (anon RLS) |
 | Ops playbook | `docs/OPERATIONS.md` | Operator knowledge (deploy, build, pitfalls) |
-| Client skill | `docs/CLIENT_SKILL.md` | **User-facing Hermes skill** — lets subscribers ask their agent "what does this signal mean?" / "what happened with XAUUSD on <date>?" |
+| Client skill | `skills/trading/talaria-client/SKILL.md` | **User-facing Hermes skill** — lets subscribers ask their agent "what does this signal mean?" / "what happened with XAUUSD on <date>?" |
 
 ## Not in this repo (stays in the workspace)
 
