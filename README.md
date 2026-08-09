@@ -1,68 +1,91 @@
-# noble-trader-talaria
+<p align="center">
+  <img src="https://img.shields.io/badge/Talaria-Noble%20Trading%20Signals-4c9aff" alt="Talaria" />
+  <img src="https://img.shields.io/badge/status-live-16a34a" alt="live" />
+  <img src="https://img.shields.io/badge/plugin-Hermes%20Desktop-888" alt="Hermes Desktop" />
+</p>
 
-Standalone, deployable repo for the **Talaria client plugin** — the paywalled
-Hermes desktop plugin that delivers Noble Trader signal + paper analytics to
-subscribers. Modeled on the hermes-vault release pattern (versioned tags,
-plugin dirs + README install instructions, tests + verification).
+# Talaria — Noble Trader signals, inside your Hermes
 
-## What this repo is
+**Talaria** is the client-facing Hermes Desktop plugin for the **Noble Trader**
+signal service. It brings live signals, renko charts, signal health, and paper
+analytics straight into your Hermes agent — no backend, no local server, no
+secrets on your machine. The plugin talks to Supabase directly with a public
+(read-only) key, so **nothing sensitive ever touches your device**.
 
-Talaria = **read-only UI + chat tools** over the Noble Trader Supabase data
-surface (public anon key + RLS-granted views). No backend hop, no local
-server — the plugin talks to Supabase REST directly. This repo packages the
-client-facing artifacts so any Hermes user can install them:
+> 🔒 **Subscription required.** Talaria is a paid service. Choose your plan at
+> **[nobletrading.app](https://nobletrading.app)** — your claim token unlocks
+> the dashboard after checkout.
 
-| Component | Path | What it is |
-|---|---|---|
-| Desktop plugin (UI) | `plugins/talaria/desktop/plugin.js` | Hermes Electron runtime page — dashboard, charts, hot signals, paper analytics |
-| Root plugin copy | `plugins/talaria/plugin.js` | **Must stay byte-identical** to `desktop/plugin.js` (Electron may load either) |
-| Render harness | `plugins/talaria/desktop/test_talaria_render_harness.mjs` | Node render tests for the UI |
-| Python tools plugin | `plugins/talaria-tools/` | In-chat agent tools: `talaria_health`, `talaria_stats`, `talaria_calibration` |
-| Cron notifiers | `scripts/talaria_digest.py`, `scripts/talaria_signal_notify.py` | Daily digest + live signal watcher (Hermes cron) |
-| Schema contract | `supabase/migrations/` | Views/tables the plugin reads (anon RLS) |
-| Ops playbook | `docs/OPERATIONS.md` | Operator knowledge (deploy, build, pitfalls) |
-| Client skill | `docs/CLIENT_SKILL.md` | **User-facing Hermes skill** — lets subscribers ask their agent "what does this signal mean?" / "what happened with XAUUSD on <date>?" |
+---
 
-## Not in this repo (stays in the workspace)
+## What's in this release (v0.1.0)
 
-- **Backend publisher** → `noble-trader-fastapi-backend` (sweeps, views, Supabase Realtime broadcast)
-- **Subscription portal / claim minting** → `nobletradingapp` (Clerk + Helio checkout, `talaria-check` Edge Function)
-- **Proxy / Redis feed** → `noble-trader-proxy` (being retired; `NOBLE_TRADER_REDIS_PUBLISH_ENABLED=false` cuts it)
+| Component | What it is |
+|---|---|
+| **Talaria desktop plugin** | Native Hermes Desktop page: live hot signals, renko brick charts (hover for prices), per-symbol signal health, paper book + portfolio analytics, 60s auto-refresh + realtime updates |
+| **talaria-tools** | In-chat agent tools — `talaria_health`, `talaria_stats`, `talaria_calibration` — so your Hermes agent can answer "what does this signal mean?" |
+| **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
+| **Signal notifier + daily digest** | Optional Hermes cron scripts that deliver new signals to whatever messaging you've connected |
+| **Supabase migrations** | The read-only views/tables the plugin reads (anon RLS — subscribers can only SELECT) |
+
+**Data flow:** Noble Trader's quant engine sweeps symbols every 5 minutes
+(light) and weekly (heavy), and qualified signals are published to Supabase →
+your Talaria dashboard renders them in real time.
 
 ## Install
 
+Requirements: **Hermes Desktop** (Electron app), ~2 minutes.
+
+**1. Copy the plugin to your Hermes home** — the desktop app loads the plugin
+from its `desktop-plugins` directory:
+
 ```bash
-# 1. Copy the desktop plugin to your Hermes home (3 locations for the Electron app)
-SRC=plugins/talaria/plugin.js
+# Download talaria-plugin-v0.1.0.zip from the Releases tab, then:
+unzip talaria-plugin-v0.1.0.zip
+SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
-  "$HOME/AppData/Local/hermes/profiles/<your-profile>/desktop-plugins/talaria" \
-  "$HOME/.hermes/desktop-plugins/talaria"; do
-  mkdir -p "$d" && cp "$SRC" "$d/plugin.js" && cmp -s "$SRC" "$d/plugin.js" && echo "OK $d"
+  "$HOME/AppData/Local/hermes/profiles/<your-profile>/desktop-plugins/talaria"; do
+  mkdir -p "$d" && cp "$SRC" "$d/plugin.js" && echo "OK $d"
 done
-
-# 2. Python tools plugin (chat tools) → Hermes Python plugin root
-cp -r plugins/talaria-tools "$HOME/AppData/Local/hermes/profiles/<your-profile>/plugins/"
-
-# 3. Enable + set env
-hermes config set plugins.enabled '["talaria"]' --profile <your-profile>
-# env: TALARIA_SUPABASE_URL, TALARIA_SUPABASE_KEY (anon), TALARIA_CLAIM_TOKEN (optional)
-
-# 4. Restart the Hermes desktop app (or ⌘K → Reload desktop plugins)
 ```
 
-## Verify after install
+**2. (Optional) Python chat tools** — copy `talaria-tools/` to
+`<hermes-home>/profiles/<your-profile>/plugins/` and set:
+`TALARIA_SUPABASE_URL`, `TALARIA_SUPABASE_KEY` (the public anon key from the
+Connect tab), `TALARIA_CLAIM_TOKEN` (from nobletrading.app).
 
-1. `node --check plugins/talaria/desktop/plugin.js` → exit 0
-2. `node plugins/talaria/desktop/test_talaria_render_harness.mjs` → all PASS
-3. `cmp plugins/talaria/desktop/plugin.js plugins/talaria/plugin.js` → identical
-4. Open `/talaria` in the desktop app → Connect tab → dashboard renders
+**3. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
+**Talaria** in Settings → Plugins, and open the **Talaria** tab.
 
-## Release checklist (hermes-vault style)
+**4. Connect** — paste your Supabase URL + claim token (get both from
+**[nobletrading.app](https://nobletrading.app)** after checkout). The
+dashboard unlocks.
 
-- [ ] Bump `plugin.yaml` version + package version
-- [ ] Run harness + `node --check` + `cmp` byte-verify
-- [ ] Regenerate daisyUI bundle if plugin classNames changed (`tailwind.plugin.bundle.css` re-embed)
-- [ ] Tag `v0.x.0` + push (requires explicit "push git")
-- [ ] GitHub Release with install notes (copy the Install section above)
-- [ ] Smoke: fresh-home install per the Install section, dashboard + one tool call
+> Windows users: the paths above assume the default Hermes home. If your
+> profile lives elsewhere, substitute `<your-profile>` and the profile's
+> `desktop-plugins` path.
+
+## Verify it works
+
+1. Open the **Talaria** tab → Connect → dashboard renders (signals, charts).
+2. Try the chat: *"what does this signal mean?"* → your agent answers using
+   `talaria-client`.
+3. The dashboard refreshes every 60s and updates live via Supabase Realtime.
+
+## Docs
+
+- [CLIENT_SKILL.md](docs/CLIENT_SKILL.md) — what your agent can answer for you
+- [OPERATIONS.md](docs/OPERATIONS.md) — operator/deploy notes
+- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — repo structure, install details, release checklist
+
+## Subscribe
+
+Talaria plans (Signal Scout / Precision Pro) are managed at
+**[nobletrading.app](https://nobletrading.app)** — checkout, claim tokens,
+and account management live there. The plugin is the client; the portal is
+where your subscription is handled.
+
+---
+
+Copyright © Lexington Tech LLC
