@@ -477,18 +477,26 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
     let h = yBot - yTop
     if (h < MIN_BRICK_H) { h = MIN_BRICK_H; yTop = yBot - h }
     const up = b.direction === 'up'
-    return React.createElement('rect', {
-      key: i,
-      x: BRICK_LEFT_PAD + i * BRICK_STEP,
-      y: yTop,
-      width: BRICK_W,
-      height: h,
-      rx: 1.5,
-      fill: up ? 'var(--ui-accent,#4c9aff)' : 'var(--ui-danger,#ff5c5c)',
-      fillOpacity: 0.85,
-      stroke: up ? '#16a34a' : '#dc2626',
-      strokeWidth: 0.5,
-    })
+    // Hover tooltip (native SVG <title>): brick price, direction, index, time.
+    const tip = [
+      b.symbol, '·', b.direction, 'brick', '·', 'idx', String(b.brick_index ?? ''),
+      '·', fmtBrickPrice(b.open_price), '→', fmtBrickPrice(b.close_price),
+      '·', String(b.ts || '').slice(0, 16).replace('T', ' ') + ' UTC',
+    ].filter(Boolean).join(' ')
+    return React.createElement('g', { key: i },
+      React.createElement('title', null, tip),
+      React.createElement('rect', {
+        x: BRICK_LEFT_PAD + i * BRICK_STEP,
+        y: yTop,
+        width: BRICK_W,
+        height: h,
+        rx: 1.5,
+        fill: up ? 'var(--ui-accent,#4c9aff)' : 'var(--ui-danger,#ff5c5c)',
+        fillOpacity: 0.85,
+        stroke: up ? '#16a34a' : '#dc2626',
+        strokeWidth: 0.5,
+      }),
+    )
   })
 
   const gridEls = gridLines.map((p) => {
