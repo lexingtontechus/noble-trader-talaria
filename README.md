@@ -27,7 +27,7 @@ action behind each signal:
 
 ---
 
-## What's in this release (v0.1.0)
+## What's in this release (v0.2.0)
 
 | Component | What it is |
 |---|---|
@@ -71,8 +71,8 @@ Requirements: **Hermes Desktop** (Electron app), ~2 minutes.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.1.0.zip from the Releases tab, then:
-unzip talaria-plugin-v0.1.0.zip
+# Download talaria-plugin-v0.2.0.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.0.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
