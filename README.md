@@ -32,6 +32,28 @@ secrets on your machine. The plugin talks to Supabase directly with a public
 (light) and weekly (heavy), and qualified signals are published to Supabase →
 your Talaria dashboard renders them in real time.
 
+## Why Noble Trader
+
+Talaria isn't a chart with arrows. Behind every signal is a pipeline built to
+**produce fewer, higher-conviction calls**:
+
+- **Renko bricks** — price action rebuilt as fixed-size bricks, so only real
+  price moves count (no time-based noise)
+- **HMM regime detection** — the engine knows whether it's in a trending or
+  ranging, high- or low-volatility market before it says anything
+- **TimesFM foundation-model forecasts** — a learned view of "what happens
+  next", fed in as a confidence-gated input
+- **EV Engine v5** — four probability sources (pattern, regime, Markov,
+  TimesFM) blended into one expected-value score; nothing is trusted alone
+- **7 quality gates + Kelly sizing** — most signals are rejected on purpose;
+  the ones that publish carry an explicit edge estimate and a math-sized
+  position
+- **Weekly recalibration + nightly calibration-bias correction + paper-book
+  validation** — the engine re-adapts to the market and is audited against
+  realized outcomes
+
+> Want the full technical tour? See [How Noble Trader works](docs/HOW_IT_WORKS.md).
+
 ## Install
 
 Requirements: **Hermes Desktop** (Electron app), ~2 minutes.
