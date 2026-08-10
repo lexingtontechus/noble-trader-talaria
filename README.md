@@ -67,7 +67,11 @@ Talaria isn't a chart with arrows. Behind every signal is a pipeline built to
 
 Requirements: **Hermes Desktop** (Electron app), ~2 minutes.
 
-**1. Copy the plugin to your Hermes home** — the desktop app loads the plugin
+**1. Install Hermes** — Talaria runs inside the Hermes Desktop app. Install
+Hermes first (see [How to install Hermes](#how-to-install-hermes) below), then
+launch it once so your home directory is created.
+
+**2. Copy the plugin to your Hermes home** — the desktop app loads the plugin
 from its `desktop-plugins` directory:
 
 ```bash
@@ -81,24 +85,31 @@ for d in \
 done
 ```
 
-**2. (Optional) Python chat tools** — copy `talaria-tools/` to
-`<hermes-home>/profiles/<your-profile>/plugins/` and set:
-`TALARIA_SUPABASE_URL`, `TALARIA_SUPABASE_KEY` (the public anon key from the
-Connect tab), `TALARIA_CLAIM_TOKEN` (from nobletrading.app).
+> The exact path depends on your Hermes home and active profile. The desktop
+> app loads plugins from `<hermes-home>/desktop-plugins/` (default home) or
+> `<hermes-home>/profiles/<active-profile>/desktop-plugins/` (when a
+> non-default profile is active). If the widget doesn't appear after restart,
+> check which profile is active and copy to its `desktop-plugins` too.
 
-**3. (Optional) Agent skill** — copy the `talaria-client` skill so your
+**3. (Optional) Python chat tools** — copy `talaria-tools/` to
+`<hermes-home>/profiles/<your-profile>/plugins/` and set
+`TALARIA_SUPABASE_URL`, `TALARIA_SUPABASE_KEY` (the public anon key — same
+values the plugin uses by default), `TALARIA_CLAIM_TOKEN` (from
+nobletrading.app).
+
+**4. (Optional) Agent skill** — copy the `talaria-client` skill so your
 Hermes agent can answer signal questions:
 
 ```bash
 cp -r skills/trading/talaria-client "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
 ```
 
-**4. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
+**5. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
 **Talaria** in Settings → Plugins, and open the **Talaria** tab.
 
-**5. Connect** — paste your Supabase URL + claim token (get both from
-**[nobletrading.app](https://nobletrading.app)** after checkout). The
-dashboard unlocks.
+**6. Connect** — paste your **claim token** (get it from
+**[nobletrading.app](https://nobletrading.app)** after checkout). The service
+connection is pre-configured — no URLs or keys to enter. The dashboard unlocks.
 
 > Windows users: the paths above assume the default Hermes home. If your
 > profile lives elsewhere, substitute `<your-profile>` and the profile's
@@ -106,10 +117,121 @@ dashboard unlocks.
 
 ## Verify it works
 
-1. Open the **Talaria** tab → Connect → dashboard renders (signals, charts).
+1. Open the **Talaria** tab → Connect → paste your claim token → dashboard renders (signals, charts).
 2. Try the chat: *"what does this signal mean?"* → your agent answers using
    `talaria-client`.
 3. The dashboard refreshes every 60s and updates live via Supabase Realtime.
+
+## How to install Hermes
+
+Talaria is a plugin for **Hermes Desktop** — the native Electron app by
+[Nous Research](https://hermes-agent.nousresearch.com). If you don't have it
+yet:
+
+**1. Install Hermes (Windows / macOS / Linux)**
+
+```bash
+# Official shell installer (sets up uv, Python, the venv, and the launcher)
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+
+**2. Launch the desktop app**
+
+```bash
+hermes desktop        # native Electron desktop app (alias: hermes gui)
+```
+
+On first launch, run the setup wizard to pick your model provider:
+
+```bash
+hermes setup          # model + provider + preferences
+hermes model          # switch models any time
+hermes doctor         # health check if something's off
+```
+
+**3. Where your Hermes home is**
+
+- Default home: `~/.hermes/` (on Windows: `C:\Users\<you>\.hermes\`)
+- Or `%LOCALAPPDATA%\hermes\` if you installed via the Windows desktop
+  bundle — the app resolves `HERMES_HOME` from the registry first.
+- With a non-default profile active: `~/.hermes/profiles/<profile>/` (or
+  `%LOCALAPPDATA%\hermes\profiles\<profile>\`).
+
+Talaria's plugin file goes in `<hermes-home>/desktop-plugins/talaria/plugin.js`
+(or the active profile's `desktop-plugins/` — see [Install](#install)).
+
+> **Windows note:** after installing, log out/in or open a fresh terminal so
+> `hermes` is on your PATH. `hermes desktop` launches the app; the plugin
+> shows up under Settings → Plugins → **Talaria** after a restart or
+> ⌘K → *Reload desktop plugins*.
+
+## Quick user guide — get the most out of Talaria
+
+Talaria is more than a dashboard tab. Here's the 5-minute setup to make it
+yours.
+
+**1. Keep signals beside your chat (widget pane)**
+
+After connecting, enable the **Talaria signals** pane (Settings → Plugins →
+Talaria). A live widget docks to the right of your chat session showing the
+latest signal with its ENTRY / SL / TP levels, unread count, and a rolling
+list of recent signals (last 60 minutes). Click a signal → full dashboard.
+You can drag or resize the pane; it stays live while you work anywhere in
+Hermes.
+
+**2. Let your agent answer signal questions (skills + tools)**
+
+Copy the `talaria-client` skill (see [Install](#install)) and enable the
+**talaria-tools** plugin. Then in chat you can ask:
+
+- *"What does this signal mean?"*
+- *"How has XAUUSD been calibrated this week?"*
+- *"What's our paper portfolio performance?"*
+- *"Summarize today's signals."*
+
+Your agent answers from live data — no manual lookups.
+
+**3. Get notified without watching the screen**
+
+Two optional cron jobs ship with Talaria (see `scripts/`):
+
+- **Signal notifier** — every 5 min, prints *new* qualified signals to your
+  connected chat (Discord/Telegram/desktop).
+- **Daily digest** — one markdown summary per day at 15:00 of signals,
+  health, and calibration.
+
+Enable them in Hermes (cron UI or `hermes cron`) and connect a messaging
+channel with `hermes setup` → *gateway* if you want them outside the desktop
+app.
+
+**4. Set up memory so Talaria "knows" you**
+
+Hermes keeps persistent memory per profile. Tell it the facts that matter and
+they stick across sessions:
+
+- *"Remember: I trade gold and metals, primarily XAUUSD and XAGUSD."*
+- *"Remember: I prefer signals with kelly ≥ 0.1."*
+- *"Remember: summarize signals in my local timezone."*
+
+The agent also saves lessons learned from your corrections, so it gets better
+at answering Talaria questions over time.
+
+**5. Understand what you're looking at**
+
+- **Hot signals** — the most recent qualified signals, ranked by Kelly (the
+  engine's conviction). Chips drop off after 10 minutes.
+- **Renko chart + levels legend** — the price structure behind the signal;
+  ENTRY / SL / TP shown in full below the chart.
+- **Signal health / calibration** — per-symbol win rates and whether the
+  engine is over- or under-confident.
+- **Paper portfolio (Pro)** — simulated book the strategy is validated
+  against; PnL is realized only on close, so open positions show `$0/—`.
+
+**6. Keep it fresh**
+
+The dashboard auto-refreshes every 60s and streams live when available. The
+widget pane shows only the last 60 minutes of signals; unread counts clear
+when you open the dashboard.
 
 ## Docs
 
