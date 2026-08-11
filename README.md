@@ -90,8 +90,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.2.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.2.zip
+# Download talaria-plugin-v0.2.3.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.3.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
