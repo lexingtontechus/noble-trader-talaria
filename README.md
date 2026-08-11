@@ -27,6 +27,25 @@ action behind each signal:
 
 ---
 
+## What's in this release (v0.2.3)
+
+**Plan-scoped realtime channels + channel rename.**
+
+| Change | Detail |
+|---|---|
+| **Plan-scoped signal broadcasts** | Signals are now published per plan: `realtime:signals.signal_scout` (Scout's symbols) and `realtime:signals.precision_pro` (Pro's symbols). The backend routes each signal to the topic(s) matching the symbol's plan membership; the plugin joins only its own plan's topic (decided by the server-validated claim — never client-guessed). Pro subscribers receive Scout + Pro symbols; Scout subscribers receive only their 10. |
+| **`realtime:paper` → `realtime:portfolio`** | The paper-validation channel was renamed. It carries the **simulated validation book** (positions the engine would have taken, realized PnL, equity ticks) — not a demo trading account. Topic is now `realtime:portfolio` (Precision Pro only). |
+| **Fail-open routing** | If a symbol's plan membership can't be resolved, the signal is published to **both** plan topics so no subscriber misses it. Unknown plan claims also join both topics (same rule). |
+| **Widget display order + dedup** | The signals pane now renders **most-recent-at-top** (newest first, always — even after a batch poll), the pinned card shows the actual newest signal instead of a stale persisted one, and a signal **never renders twice** (the card's signal is excluded from the list — fixes the duplicated-row look in the widget). Badge counts all live signals. |
+| **Date/Time columns in user locale** | The Paper portfolio table's timestamp column is now **Date/Time** in your **local timezone** (e.g. `2026-08-10 13:25 PDT`) instead of a raw UTC `ts`. Same change in the admin plugin's Recent signals table. |
+| **Supabase Realtime dashboard** | Nothing to configure there — broadcast channels are dynamic. No triggers, policies, or publications are needed for this broadcast-only setup. |
+
+**Data flow:** Noble Trader's quant engine sweeps symbols every 5 minutes
+(light) and weekly (heavy), and qualified signals are published to Supabase →
+your Talaria dashboard renders them in real time.
+
+---
+
 ## What's in this release (v0.2.2)
 
 | Component | What it is |
@@ -36,10 +55,6 @@ action behind each signal:
 | **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
 | **Signal notifier + daily digest** | Optional Hermes cron scripts that deliver new signals to whatever messaging you've connected |
 | **Supabase migrations** | The read-only views/tables the plugin reads (anon RLS — subscribers can only SELECT) |
-
-**Data flow:** Noble Trader's quant engine sweeps symbols every 5 minutes
-(light) and weekly (heavy), and qualified signals are published to Supabase →
-your Talaria dashboard renders them in real time.
 
 ## Why Noble Trader
 

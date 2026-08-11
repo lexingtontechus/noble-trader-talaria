@@ -17,9 +17,11 @@
  *     nt_paper_positions + v_paper_equity via the PUBLIC anon key
  *     (read-only RLS, migration 107).
  *   - Live push: native WebSocket to the Supabase Realtime endpoint
- *     (Phoenix protocol) — joins `realtime:signals` (all plans) and
- *     `realtime:paper` (Precision Pro only). Falls back to the 60s REST poll
- *     on socket error/close — never blanks the dashboard.
+ *     (Phoenix protocol) — joins the plan-scoped signal topic
+ *     `realtime:signals.<plan_slug>` (plan from the SERVER response, never
+ *     client-guessed) and `realtime:portfolio` (paper-portfolio validation
+ *     events; Precision Pro only). Falls back to the 60s REST poll on socket
+ *     error/close — never blanks the dashboard.
  *
  * Claim check cadence: on mount + every 24h. Data refresh: every 60s.
  * Runtime disk plugins are plain ESM — no JSX. Uses React.createElement.
@@ -37,7 +39,7 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 
 // Plugin version — bumped per release. Shown in the pane + dashboard footers
 // so the deployed build is verifiable in-app (2026-08-11).
-const PLUGIN_VERSION = '0.2.2'
+const PLUGIN_VERSION = '0.2.3'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -256,18 +258,32 @@ function useRealtime(config, enabled, planSlug, handlers) {
         if (disposed) { try { ws.close() } catch (e) {} return }
         setState('open')
         attempts = 0
-        ws.send(JSON.stringify({
-          topic: 'realtime:signals',
-          event: 'phx_join',
-          payload: { config: { broadcast: { self: false, ack: false } } },
-          ref: '1',
-        }))
-        if (planSlug === 'precision_pro') {
+        // Plan-scoped signal topic (2026-08-11): join ONLY the plan's own
+        // topic — plan_slug comes from the server talaria-check response,
+        // never client-derived. Unknown/empty plan → fail-open to BOTH plan
+        // topics (mirrors the backend publisher: over-delivery is benign,
+        // under-delivery is not).
+        const signalTopics = planSlug
+          ? ['realtime:signals.' + planSlug]
+          : ['realtime:signals.signal_scout', 'realtime:signals.precision_pro']
+        signalTopics.forEach((topic, i) => {
           ws.send(JSON.stringify({
-            topic: 'realtime:paper',
+            topic,
             event: 'phx_join',
             payload: { config: { broadcast: { self: false, ack: false } } },
-            ref: '2',
+            ref: String(i + 1),
+          }))
+        })
+        // Paper-portfolio validation events — Precision Pro only. Topic
+        // renamed 2026-08-11 from `realtime:paper` to `realtime:portfolio`
+        // (the channel carries the SIMULATED validation book, not a demo
+        // trading account).
+        if (planSlug === 'precision_pro') {
+          ws.send(JSON.stringify({
+            topic: 'realtime:portfolio',
+            event: 'phx_join',
+            payload: { config: { broadcast: { self: false, ack: false } } },
+            ref: String(signalTopics.length + 1),
           }))
         }
       }
@@ -1202,7 +1218,7 @@ function PaperSection({ positions, equity, events }) {
           React.createElement('th', null, 'Dir'),
           React.createElement('th', null, 'Realized PnL'),
           React.createElement('th', null, 'R-multiple'),
-          React.createElement('th', null, 'Ts'))),
+          React.createElement('th', null, 'Date/Time'))),
       React.createElement('tbody', null,
         paperPageRows.length
           ? paperPageRows.map((r, i) => (
@@ -1215,7 +1231,7 @@ function PaperSection({ positions, equity, events }) {
                 className: (r.realized_pnl || 0) >= 0 ? 'tla-pos' : 'tla-neg',
               }, r.realized_pnl != null ? `$${Number(r.realized_pnl).toFixed(2)}` : '—'),
               React.createElement('td', { className: 'tla-sm' }, r.r_multiple != null ? Number(r.r_multiple).toFixed(2) : '—'),
-              React.createElement('td', { className: 'tla-sm' }, String(r.ts || '').slice(0, 16)),
+              React.createElement('td', { className: 'tla-sm' }, fmtSignalTime(Date.parse(r.ts || ''))),
             )
           ))
           : React.createElement('tr', null,
@@ -1772,7 +1788,7 @@ function TalariaDashboard({ config, claim }) {
       React.createElement(StatCard, {
         title: 'Realtime',
         value: wsState === 'open' ? 'Live' : wsState === 'connecting' ? 'Connecting' : wsState === 'idle' ? '—' : 'Poll fallback',
-        sub: 'signals' + (isPro ? ' + paper' : '') + ' channels · REST poll 60s',
+        sub: 'signals (' + (isPro ? 'pro' : 'scout') + ')' + (isPro ? ' + portfolio' : '') + ' · REST poll 60s',
         tone: wsState === 'open' ? 'pos' : undefined,
       }),
       React.createElement(StatCard, {
@@ -2056,22 +2072,39 @@ function TalariaSignalsPane() {
   const unread = snap.unread || 0
   const last = snap.lastSignal
   const recent = snap.recent || []
-  const lastTs = last && Date.parse(last.ts)
-  const dir = last && String(last.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
-  // TTL: only show signals within the last 60 min (render-time filter — the
-  // store keeps everything, per user decision 2026-08-10).
-  const lastFresh = last && lastTs && (now - lastTs) <= SIGNAL_TTL_MS
-  const rows = recent
-    .filter((r) => Date.parse(r.ts) && (now - Date.parse(r.ts)) <= SIGNAL_TTL_MS)
+  // DISPLAY ORDER (2026-08-11, user: "most recent at top"): the pinned card
+  // shows the NEWEST TTL-fresh signal (max ts — NOT the possibly-stale
+  // persisted lastSignal, which only updates on unread increments and can
+  // lag a whole batch), and the list below renders newest-first. The card's
+  // own signal is excluded from the list so a signal NEVER renders twice
+  // (card + list) — that was the widget duplication seen in screenshots.
+  const lastTs = last ? (Date.parse(last.ts) || 0) : 0
+  const lastFresh = last && lastTs > 0 && (now - lastTs) <= SIGNAL_TTL_MS
+  const freshRows = (recent || [])
+    .map((r) => ({ ...r, _ts: Date.parse(r.ts) || 0 }))
+    .filter((r) => r._ts > 0 && (now - r._ts) <= SIGNAL_TTL_MS)
+    .sort((a, b) => b._ts - a._ts)
+  let card = null
+  let cardTs = 0
+  if (freshRows.length && (!lastFresh || freshRows[0]._ts > lastTs)) {
+    card = freshRows[0]
+    cardTs = card._ts
+  } else if (lastFresh) {
+    card = last
+    cardTs = lastTs
+  }
+  const cardKey = card && card.ts ? `${card.symbol}|${card.ts}` : null
+  const rows = (cardKey ? freshRows.filter((r) => `${r.symbol}|${r.ts}` !== cardKey) : freshRows)
     .slice(0, RECENT_MAX)
+  const dir = card && String(card.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
   // LIVE COUNT (2026-08-11): the badge reflects the number of LIVE qualified
-  // signals (TTL-fresh rows), NOT the accumulated unread counter (which was
-  // capped at 99 and never decayed — "99 new" was meaningless). Rows may be
-  // fewer than all live signals when more than RECENT_MAX are fresh.
-  const liveCount = rows.length
+  // signals (TTL-fresh recent rows — same count as the chip), NOT the
+  // accumulated unread counter (which was capped at 99 and never decayed —
+  // "99 new" was meaningless).
+  const liveCount = freshRows.length
 
-  const lastPriceLine = lastFresh && last &&
-    (Number(last.entry) > 0 || Number(last.stop) > 0 || Number(last.take) > 0)
+  const lastPriceLine = card &&
+    (Number(card.entry) > 0 || Number(card.stop) > 0 || Number(card.take) > 0)
 
   return React.createElement('div', { className: 'tla-pane-root' },
     React.createElement('div', { className: 'tla-pane-header' },
@@ -2086,20 +2119,20 @@ function TalariaSignalsPane() {
         onClick: () => { signalStore.markSeen(); navigateTo('/talaria') },
       }, 'Open'),
     ),
-    lastFresh && last
+    card
       ? React.createElement('div', { className: 'tla-pane-last' },
-          React.createElement('span', { className: 'tla-pane-sym' }, last.symbol),
+          React.createElement('span', { className: 'tla-pane-sym' }, card.symbol),
           React.createElement('span', {
-            className: cn('tla-pane-dir', String(last.direction || '').toLowerCase() === 'sell' ? 'tla-pane-sell' : 'tla-pane-buy'),
+            className: cn('tla-pane-dir', String(card.direction || '').toLowerCase() === 'sell' ? 'tla-pane-sell' : 'tla-pane-buy'),
           }, dir),
-          last.kelly != null ? React.createElement('span', { className: 'tla-pane-kelly' }, `kelly ${Number(last.kelly).toFixed(3)}`) : null,
-          last.regime ? React.createElement('span', { className: 'tla-pane-regime', title: 'Market regime' }, fmtRegime(last.regime)) : null,
-          React.createElement('span', { className: 'tla-pane-ts' }, `${fmtSignalTime(lastTs)} · ${fmtAge(lastTs)}`),
+          card.kelly != null ? React.createElement('span', { className: 'tla-pane-kelly' }, `kelly ${Number(card.kelly).toFixed(3)}`) : null,
+          card.regime ? React.createElement('span', { className: 'tla-pane-regime', title: 'Market regime' }, fmtRegime(card.regime)) : null,
+          React.createElement('span', { className: 'tla-pane-ts' }, `${fmtSignalTime(cardTs)} · ${fmtAge(cardTs)}`),
           lastPriceLine
             ? React.createElement('div', { className: 'tla-pane-price' },
-                Number(last.entry) > 0 ? React.createElement('span', { className: 'tla-pane-price-entry' }, `ENTRY ${fmtBrickPrice(last.entry)}`) : null,
-                Number(last.stop) > 0 ? React.createElement('span', { className: 'tla-pane-price-sl' }, `SL ${fmtBrickPrice(last.stop)}`) : null,
-                Number(last.take) > 0 ? React.createElement('span', { className: 'tla-pane-price-tp' }, `TP ${fmtBrickPrice(last.take)}`) : null,
+                Number(card.entry) > 0 ? React.createElement('span', { className: 'tla-pane-price-entry' }, `ENTRY ${fmtBrickPrice(card.entry)}`) : null,
+                Number(card.stop) > 0 ? React.createElement('span', { className: 'tla-pane-price-sl' }, `SL ${fmtBrickPrice(card.stop)}`) : null,
+                Number(card.take) > 0 ? React.createElement('span', { className: 'tla-pane-price-tp' }, `TP ${fmtBrickPrice(card.take)}`) : null,
               )
             : null,
         )

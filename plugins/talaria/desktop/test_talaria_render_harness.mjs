@@ -519,7 +519,43 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.2')), 'pane footer shows plugin version v0.2.2')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.3')), 'pane footer shows plugin version v0.2.3')
+
+// Display order + no-duplication (2026-08-11, user: "most recent at top"):
+// the pane must render newest-first and NEVER show the same signal twice
+// (pinned card + list row). Seed a realistic batch — the store holds
+// oldest-first after a 12-row poll (prepend × desc iteration) and the
+// persisted lastSignal can be STALE (older than the newest row). The card
+// must show the NEWEST signal, not the stale one, and its signal must not
+// also appear in the list below.
+const tOrd1 = new Date(Date.now() - 20 * 60 * 1000).toISOString() // AUDUSD 20m (oldest)
+const tOrd2 = new Date(Date.now() - 15 * 60 * 1000).toISOString() // BTCUSD 15m
+const tOrd3 = new Date(Date.now() - 10 * 60 * 1000).toISOString() // EURUSD 10m
+const tOrd4 = new Date(Date.now() - 5 * 60 * 1000).toISOString()  // GBPUSD 5m (newest)
+store.watermark = null
+store.newestTs = null
+store.recent = [
+  { symbol: 'AUDUSD', direction: 'buy', kelly: 0.04, regime: 'high_vol_bull', entry: 0.695, stop: 0.691, take: 0.705, ts: tOrd1 },
+  { symbol: 'BTCUSD', direction: 'buy', kelly: 0.04, regime: 'high_vol_strong_bull', entry: 63389, stop: 62929, take: 64618, ts: tOrd2 },
+  { symbol: 'EURUSD', direction: 'sell', kelly: 0.04, regime: 'high_vol_strong_bear', entry: 1.1458, stop: 1.1488, take: 1.1398, ts: tOrd3 },
+  { symbol: 'GBPUSD', direction: 'sell', kelly: 0.04, regime: 'high_vol_strong_bear', entry: 1.3365, stop: 1.3395, take: 1.3305, ts: tOrd4 },
+]
+// Stale persisted lastSignal (same as the OLDEST row) — must NOT win the card.
+store.lastSignal = { symbol: 'AUDUSD', direction: 'buy', kelly: 0.04, regime: 'high_vol_bull', entry: 0.695, stop: 0.691, take: 0.705, ts: tOrd1 }
+store.unread = 0
+store._persist()
+stub.reset()
+stub.setRenderFn(() => pane.render())
+stub.renderOnce()
+const orderAcc = { texts: [], classes: [], titles: [] }
+walk(stub.getLatestRoot(), orderAcc)
+const symOrder = orderAcc.texts.filter((t) => ['AUDUSD', 'BTCUSD', 'EURUSD', 'GBPUSD'].includes(t))
+assert(symOrder[0] === 'GBPUSD', 'most recent signal renders FIRST (card = newest, not stale lastSignal)')
+assert(symOrder.join('|') === 'GBPUSD|EURUSD|BTCUSD|AUDUSD', 'pane display order is newest-first (desc ts)')
+const audCount = orderAcc.texts.filter((t) => t === 'AUDUSD').length
+assert(audCount === 1, 'signal renders exactly once (card+list dedup) — no widget duplication')
+const liveText = orderAcc.texts.find((t) => /^\d+ live$/.test(t))
+assert(liveText === '4 live', 'badge counts all live signals (4) even though the card is not a list row')
 
 // Price enrichment (2026-08-10): a duplicate row (same symbol+ts) re-arriving
 // WITH prices must enrich the existing store entry + lastSignal, so signals
@@ -577,6 +613,13 @@ assert(hasText('10 bricks'), 'renko chart window hint renders')
 assert(hasText('levels:'), 'renko pricing legend row renders (all symbols)')
 assert(hasText('ENTRY'), 'renko legend shows ENTRY level')
 assert(hasText('Paper portfolio'), 'Pro-only paper section renders (precision_pro claim)')
+// Date/Time column (2026-08-11, user: "change 'ts' to 'Date/Time' in user
+// locale timezone (not UTC)"): paper portfolio header renamed, and the
+// timestamp cell renders LOCAL wall-clock (space separator + optional short
+// TZ) — the seeded nt_paper_positions open_ts is ISO UTC, so the cell must
+// NOT show a raw 'T'-separated UTC slice anymore.
+assert(hasText('Date/Time'), 'paper portfolio header uses Date/Time (not Ts)')
+assert(acc.texts.some((x) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}( [A-Z]+)?$/.test(x)), 'paper portfolio timestamp cell renders LOCAL Date/Time (not raw UTC ts)')
 assert(hasText('Precision Pro'), 'plan stat shows Precision Pro')
 assert(hasText('XAUUSD'), 'symbol list / chips render symbols')
 assert(hasText('Connecting') || hasText('Live'), 'realtime stat reflects socket state')
