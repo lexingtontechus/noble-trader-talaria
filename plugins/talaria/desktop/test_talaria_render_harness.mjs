@@ -257,6 +257,26 @@ const SDK_STUB = `
 export const cn = (...a) => a.filter(Boolean).join(' ')
 export const ROUTES_AREA = 'routes-area'
 export const SIDEBAR_NAV_AREA = 'sidebar-nav-area'
+export const host = {
+  _notifyCalls: [],
+  notify: (input) => { host._notifyCalls.push(input); return 'toast-' + host._notifyCalls.length },
+  navigate: () => {},
+}
+globalThis.__HARNESS_HOST__ = host
+`
+
+// ── window mock (navigateTo contract) ─────────────────────────────────────
+// The plugin's navigateTo() sets window.location.hash then dispatches a
+// popstate event (react-router's HashRouter listens to popstate, not
+// hashchange — verified against react-router dist, 2026-08-10). This mock
+// records both so the harness can assert the navigation path fires popstate.
+const WINDOW_STUB = `
+globalThis.__NAV_EVENTS__ = []
+globalThis.window = {
+  location: { hash: '' },
+  dispatchEvent: (ev) => { globalThis.__NAV_EVENTS__.push({ type: ev && ev.type, hash: globalThis.window.location.hash }); return true },
+}
+globalThis.PopStateEvent = class PopStateEvent { constructor(type, init) { this.type = type; this.state = (init && init.state) || null } }
 `
 
 const tmp = fs.mkdtempSync(resolve(os.tmpdir(), 'talaria-harness-'))
@@ -267,7 +287,7 @@ fs.writeFileSync(resolve(tmp, 'node_modules/react/package.json'), JSON.stringify
 fs.writeFileSync(resolve(tmp, 'node_modules/react/index.js'), REACT_STUB)
 fs.writeFileSync(resolve(tmp, 'node_modules/@hermes/plugin-sdk/package.json'), JSON.stringify({ name: '@hermes/plugin-sdk', type: 'module', main: 'index.js' }))
 fs.writeFileSync(resolve(tmp, 'node_modules/@hermes/plugin-sdk/index.js'), SDK_STUB)
-fs.copyFileSync(PLUGIN_SRC, resolve(tmp, 'plugin.js'))
+fs.writeFileSync(resolve(tmp, 'plugin.js'), WINDOW_STUB + '\n' + fs.readFileSync(PLUGIN_SRC, 'utf8'))
 
 const pluginPath = resolve(tmp, 'plugin.js')
 
@@ -287,6 +307,22 @@ function walk(el, acc) {
     for (const c of el.children || []) walk(c, acc)
   }
   return acc
+}
+
+// Find the first rendered <button> element (has onClick in props).
+function findButton(el) {
+  if (el == null) return null
+  if (Array.isArray(el)) {
+    for (const c of el) { const r = findButton(c); if (r) return r }
+    return null
+  }
+  if (typeof el === 'object' && el.type != null) {
+    if (el.type === 'button' && el.props && typeof el.props.onClick === 'function') {
+      return { onClick: el.props.onClick }
+    }
+    for (const c of el.children || []) { const r = findButton(c); if (r) return r }
+  }
+  return null
 }
 
 async function flush(rounds = 15) {
@@ -314,7 +350,208 @@ assert(page.data.path === '/talaria' && nav.data.path === '/talaria', 'route/nav
 assert(nav.data.label === 'Talaria', 'nav label Talaria')
 assert(plugin.id === 'talaria' && plugin.defaultEnabled === true, 'plugin id/defaultEnabled')
 
+// --- Mode 2 widget: statusbar chip registered (2026-08-09) ---
+const chip = items.find((i) => i.id === 'chip')
+assert(!!chip, 'registerMany exposes chip item (Mode 2 widget)')
+assert(chip.area === 'statusBar.right', 'chip area statusBar.right')
+assert(typeof chip.render === 'function', 'chip render is a function')
+
+// --- Mode 2 widget: side-by-side pane registered (2026-08-09) ---
+const pane = items.find((i) => i.id === 'signals-pane')
+assert(!!pane, 'registerMany exposes signals-pane item (side-by-side widget)')
+assert(pane.area === 'panes', 'signals-pane area panes')
+assert(pane.data && pane.data.placement === 'right', 'signals-pane placement right (beside chat)')
+assert(pane.data && pane.data.dock && pane.data.dock.pane === 'workspace' && pane.data.dock.pos === 'right', 'signals-pane docks right of workspace (chat)')
+assert(typeof pane.render === 'function', 'signals-pane render is a function')
+// Render the pane standalone — must not throw.
+stub.reset()
+stub.setRenderFn(() => pane.render())
+let paneThrew = null
+try {
+  stub.renderOnce()
+  await flush()
+  stub.renderOnce()
+} catch (e) { paneThrew = e }
+assert(!paneThrew, 'signals-pane render sequence threw nothing')
+if (paneThrew) console.log('  PANE THREW: ' + (paneThrew.stack || paneThrew))
+const paneAcc = { texts: [], classes: [] }
+walk(stub.getLatestRoot(), paneAcc)
+assert(paneAcc.texts.some((x) => x.includes('Talaria signals')), 'signals-pane renders Talaria signals header')
+assert(paneAcc.classes.some((c) => c.includes('tla-pane-root')), 'signals-pane uses tla-pane-root class')
+
+// Re-arm the chip render for the chip assertions below.
+stub.reset()
+stub.setRenderFn(() => chip.render())
+let chipThrew = null
+try {
+  stub.renderOnce()
+  await flush()
+  stub.renderOnce()
+} catch (e) { chipThrew = e }
+assert(!chipThrew, 'chip render sequence threw nothing')
+if (chipThrew) console.log('  CHIP THREW: ' + (chipThrew.stack || chipThrew))
+const chipAcc = { texts: [], classes: [] }
+walk(stub.getLatestRoot(), chipAcc)
+assert(chipAcc.texts.some((x) => x.includes('Talaria')), 'chip renders Talaria label')
+assert(chipAcc.classes.some((c) => c.includes('tla-chip')), 'chip uses tla-chip class')
+
+// Navigation contract (2026-08-10): the SDK host.navigate sets location.hash
+// raw → fires hashchange, but the app's HashRouter listens to POPSTATE only,
+// so navigation silently failed. The plugin's navigateTo() must set the hash
+// AND dispatch popstate. Click the chip's button and assert both.
+const navEvents = globalThis.__NAV_EVENTS__ || []
+navEvents.length = 0
+globalThis.window.location.hash = ''
+const chipBtn = findButton(stub.getLatestRoot())
+assert(!!chipBtn, 'chip renders a clickable button')
+if (chipBtn && typeof chipBtn.onClick === 'function') {
+  chipBtn.onClick()
+  const lastEvent = navEvents[navEvents.length - 1]
+  assert(globalThis.window.location.hash === '#/talaria', 'navigateTo sets window.location.hash = #/talaria')
+  assert(lastEvent && lastEvent.type === 'popstate' && lastEvent.hash === '#/talaria', 'navigateTo dispatches popstate after hash set (HashRouter contract)')
+} else {
+  assert(false, 'chip button has onClick (navigation contract)')
+}
+
+// Single-toast contract: drive the shared store directly (the chip's async
+// poll is cancelled by the harness's sync cleanup, so the store is the
+// deterministic seam). host.notify must be called with the STABLE id (never
+// stacks), a meta footer with datetime+age, and durationMs 0 (persists until
+// the user dismisses). Two sequential signals must coalesce onto ONE id.
+const harnessHost = globalThis.__HARNESS_HOST__ || { _notifyCalls: [] }
+const store = globalThis.__TALARIA_SIGNAL_STORE__
+assert(!!store, 'signalStore exposed via test hook')
+harnessHost._notifyCalls = []
+// Reset the watermark so the direct addSignal calls below are "new" — the
+// pane/chip render already ran startSignalPolling() once and ingested the
+// seeded "now" rows, which would otherwise make t1/t2 (2m/1m ago) stale.
+store.watermark = null
+store.newestTs = null
+store.recent = []
+store._persist()
+const t1 = new Date(Date.now() - 120000).toISOString() // 2m ago
+const t2 = new Date(Date.now() - 60000).toISOString()  // 1m ago
+store.addSignal({ symbol: 'XAUUSD', direction: 'buy', kelly: 0.24, regime: 'low_vol_strong_bull', ts: t1 })
+store.addSignal({ symbol: 'EURUSD', direction: 'sell', kelly: 0.18, regime: 'high_vol_bear', ts: t2 })
+const notifyCalls = harnessHost._notifyCalls || []
+assert(notifyCalls.length >= 1, 'addSignal triggered at least one host.notify')
+const sigToasts = notifyCalls.filter((c) => c.id === 'talaria-signal-toast')
+assert(sigToasts.length >= 1, 'notify uses stable talaria-signal-toast id (never stacks)')
+const lastToast = sigToasts[sigToasts.length - 1]
+assert(lastToast && lastToast.durationMs === 0, 'toast durationMs 0 (stays until dismissed)')
+assert(lastToast && typeof lastToast.meta === 'string' && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(lastToast.meta), 'toast meta footer has datetime (local YYYY-MM-DD HH:MM)')
+assert(lastToast && /ago|just now/.test(lastToast.meta || ''), 'toast meta footer has relative age')
+assert(lastToast && /🐻|🐂|bull|bear/.test(lastToast.meta || ''), 'toast meta footer has friendly regime label')
+
+// TTL + pricing contract (2026-08-10): the pane only displays signals within
+// the 60-min window (store untouched), the last-signal card shows
+// ENTRY/SL/TP when prices exist, and rows carry prices in tooltips.
+// Seed: fresh priced signal (30m ago), stale signal (90m ago → must NOT
+// render), then re-render the pane and inspect.
+const tFresh = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+const tStale = new Date(Date.now() - 90 * 60 * 1000).toISOString()
+// Reset store state so GBPUSD (30m) becomes the baseline lastSignal (the
+// toast test left watermark at t2 = 1m ago, which would suppress it).
+store.watermark = null
+store.newestTs = null
+store.recent = []
+store.lastSignal = null
+store._persist()
+store.addSignal({ symbol: 'GBPUSD', direction: 'buy', kelly: 0.2, regime: 'low_vol_strong_bull', entry: 1.2950, stop: 1.2900, take: 1.3050, ts: tFresh })
+store.addSignal({ symbol: 'USDJPY', direction: 'sell', kelly: 0.1, regime: 'high_vol_bear', entry: 155.3, stop: 155.8, take: 154.5, ts: tStale })
+stub.reset()
+stub.setRenderFn(() => pane.render())
+let ttlThrew = null
+try {
+  stub.renderOnce()
+  await flush()
+  stub.renderOnce()
+} catch (e) { ttlThrew = e }
+assert(!ttlThrew, 'pane re-render with fresh+stale signals threw nothing')
+if (ttlThrew) console.log('  TTL THREW: ' + (ttlThrew.stack || ttlThrew))
+const ttlAcc = { texts: [], classes: [], titles: [] }
+walk(stub.getLatestRoot(), ttlAcc)
+const ttlHas = (t) => ttlAcc.texts.some((x) => x.includes(t))
+assert(ttlHas('GBPUSD'), 'TTL: fresh signal (30m) renders in pane')
+assert(!ttlHas('USDJPY'), 'TTL: stale signal (90m) does NOT render in pane (60-min window)')
+assert(ttlAcc.texts.some((x) => x.includes('ENTRY') && x.includes('1.295')), 'last-signal card shows ENTRY price')
+assert(ttlAcc.texts.some((x) => x.includes('SL') && x.includes('1.29')), 'last-signal card shows SL price')
+assert(ttlAcc.texts.some((x) => x.includes('TP') && x.includes('1.305')), 'last-signal card shows TP price')
+// Pricing on EVERY row (2026-08-11 — user: only the top signal showed
+// pricing; add ENTRY/SL/TP to all displayed signals). The fresh GBPUSD row
+// carries prices → its row must render the ENTRY/SL/TP line.
+assert(ttlAcc.texts.some((x) => x.includes('ENTRY') && x.includes('1.295')), 'row pricing: fresh signal row shows ENTRY price')
+assert(ttlAcc.texts.some((x) => x.includes('SL') && x.includes('1.29')), 'row pricing: fresh signal row shows SL price')
+assert(ttlAcc.texts.some((x) => x.includes('TP') && x.includes('1.305')), 'row pricing: fresh signal row shows TP price')
+
+// Chip neutrality: with only a stale last signal (no live rows, no unread),
+// the chip must show plain 'Talaria' (no stale symbol/direction). The recent
+// list must be empty so liveCount = 0 (2026-08-11: badge = live count, not
+// unread).
+store.watermark = null
+store.newestTs = null
+store.recent = []
+store.unread = 0
+store.lastSignal = { symbol: 'USDJPY', direction: 'sell', kelly: 0.1, regime: 'high_vol_bear', entry: 155.3, stop: 155.8, take: 154.5, ts: tStale }
+stub.reset()
+stub.setRenderFn(() => chip.render())
+stub.renderOnce()
+const chipStaleAcc = { texts: [], classes: [] }
+walk(stub.getLatestRoot(), chipStaleAcc)
+assert(chipStaleAcc.texts.some((x) => x.trim() === 'Talaria'), 'chip goes neutral (plain Talaria) when last signal is TTL-stale')
+
+// Live-count chip (2026-08-11): with a fresh recent row, the chip badge shows
+// the LIVE qualified count (Talaria · N), not the accumulated unread counter.
+store.recent = [{ symbol: 'GBPUSD', direction: 'buy', kelly: 0.2, regime: 'low_vol_strong_bull', entry: 1.2950, stop: 1.2900, take: 1.3050, ts: tFresh }]
+store.unread = 99 // stale unread must NOT drive the label anymore
+stub.reset()
+stub.setRenderFn(() => chip.render())
+stub.renderOnce()
+const chipLiveAcc = { texts: [], classes: [] }
+walk(stub.getLatestRoot(), chipLiveAcc)
+assert(chipLiveAcc.texts.some((x) => x.includes('Talaria · 1')), 'chip badge shows live qualified count (1 fresh) — not the 99 unread counter')
+assert(chipLiveAcc.classes.some((c) => c.includes('tla-chip-hot')), 'chip is hot when live signals exist')
+
+// Version footer contract (2026-08-11): both surfaces expose PLUGIN_VERSION
+// so the deployed build is verifiable in-app (user: implement v.0.2.xxxx).
+const paneFootAcc = { texts: [], classes: [] }
+stub.reset()
+stub.setRenderFn(() => pane.render())
+stub.renderOnce()
+walk(stub.getLatestRoot(), paneFootAcc)
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.2')), 'pane footer shows plugin version v0.2.2')
+
+// Price enrichment (2026-08-10): a duplicate row (same symbol+ts) re-arriving
+// WITH prices must enrich the existing store entry + lastSignal, so signals
+// persisted before the pricing feature pick up ENTRY/SL/TP on the next poll.
+const tEnrich = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+store.watermark = null
+store.newestTs = null
+store.recent = []
+store.lastSignal = null
+store._persist()
+// 1. Seed the signal WITHOUT prices (simulates the pre-pricing persisted store).
+store.addSignal({ symbol: 'EURGBP', direction: 'buy', kelly: 0.15, regime: 'low_vol_bull', ts: tEnrich })
+assert(!store.lastSignal.entry, 'seeded lastSignal has no prices yet (pre-pricing state)')
+// 2. Same symbol+ts re-arrives WITH prices (the next qualified poll).
+store.addSignal({ symbol: 'EURGBP', direction: 'buy', kelly: 0.15, regime: 'low_vol_bull', entry: 0.8620, stop: 0.8590, take: 0.8680, ts: tEnrich })
+assert(Number(store.lastSignal.entry) > 0, 'duplicate row enriches lastSignal with ENTRY price')
+assert(Number(store.lastSignal.stop) > 0, 'duplicate row enriches lastSignal with SL price')
+assert(Number(store.lastSignal.take) > 0, 'duplicate row enriches lastSignal with TP price')
+const recentEntry = (store.recent || []).find((r) => r.symbol === 'EURGBP')
+assert(recentEntry && Number(recentEntry.entry) > 0, 'duplicate row enriches recent[] entry with prices')
+// 3. Pane renders the pricing line after enrichment.
+stub.reset()
+stub.setRenderFn(() => pane.render())
+stub.renderOnce()
+const enrichAcc = { texts: [], classes: [] }
+walk(stub.getLatestRoot(), enrichAcc)
+assert(enrichAcc.texts.some((x) => x.includes('ENTRY') && x.includes('0.862')), 'pane shows ENTRY after enrichment')
+
+// Re-arm the page render for the dashboard scenario below.
+stub.reset()
 stub.setRenderFn(() => page.render())
+
 let threw = null
 try {
   stub.renderOnce() // initial mount (claim-check loading screen)
@@ -372,6 +609,15 @@ walk(stub.getLatestRoot(), acc2)
 assert(acc2.texts.some((x) => x.includes('Talaria — Connect')), 'Connect tab renders without config')
 assert(acc2.texts.some((x) => x.includes('Claim token')), 'Connect tab has claim token field')
 assert(acc2.texts.some((x) => x.includes('Save & Validate')), 'Connect tab has save button')
+// Option A (2026-08-10): service URL + anon key are embedded defaults and
+// NOT shown — the user only enters the claim token.
+assert(!acc2.texts.some((x) => x.includes('Supabase URL')), 'Connect tab hides Supabase URL field')
+assert(!acc2.texts.some((x) => x.includes('anon key') || x.includes('public key')), 'Connect tab hides anon key field')
+assert(!acc2.texts.some((x) => x.includes('Test connection')), 'Connect tab hides Test connection button')
+
+// Defaults contract: the Connect hint says the service connection is
+// pre-configured (no URL/key entry), proving defaults apply without config.
+assert(acc2.texts.some((x) => x.includes('pre-configured')), 'Connect hint says service is pre-configured')
 
 console.log('')
 if (failures.length) {

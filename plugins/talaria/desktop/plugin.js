@@ -26,7 +26,7 @@
  * Only `react` + `@hermes/plugin-sdk` imports are allowed.
  */
 import React from 'react'
-import { cn, ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
+import { cn, host, ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
 
 // ---------------------------------------------------------------------------
 // Plugin config (localStorage-backed — same pattern as noble-trader-admin)
@@ -35,14 +35,36 @@ const CONFIG_FILE = 'talaria-config.json'
 const CLAIM_CHECK_MS = 24 * 60 * 60 * 1000 // 24h subscription re-check
 const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 
+// Plugin version — bumped per release. Shown in the pane + dashboard footers
+// so the deployed build is verifiable in-app (2026-08-11).
+const PLUGIN_VERSION = '0.2.2'
+
+// ── Built-in service defaults (2026-08-10) ─────────────────────────────────
+// The Supabase project URL + PUBLIC anon key are constants shared by every
+// Talaria client (same values ship in the web portal bundle). They are NOT
+// user credentials — RLS makes anon read-only, and the real gate is the claim
+// token validated by the talaria-check Edge Function. Embedding them here
+// means a subscriber only ever enters their claim token in the Connect tab;
+// the URL/key are never shown. (User decision 2026-08-10: build Option A,
+// hide the pre-filled fields, remove Supabase references from user docs.)
+const DEFAULT_SUPABASE_URL = 'https://pcvscowltlrxzgxjurcr.supabase.co'
+const DEFAULT_ANON_KEY = 'sb_publishable_cYfseJa9z0qss0g_Y594wA_lXrWVBsa'
+
 function loadConfig() {
+  // Defaults apply when nothing is saved (or saved values are partial);
+  // saved values win so an existing user's stored config keeps working.
+  const saved = {}
   try {
     if (typeof localStorage !== 'undefined') {
       const raw = localStorage.getItem(CONFIG_FILE)
-      if (raw) return JSON.parse(raw)
+      if (raw) Object.assign(saved, JSON.parse(raw))
     }
   } catch (e) {}
-  return {}
+  return {
+    supabase_url: saved.supabase_url || DEFAULT_SUPABASE_URL,
+    supabase_key: saved.supabase_key || DEFAULT_ANON_KEY,
+    claim_token: saved.claim_token || '',
+  }
 }
 
 function saveConfig(cfg) {
@@ -280,6 +302,326 @@ function useRealtime(config, enabled, planSlug, handlers) {
 }
 
 // ---------------------------------------------------------------------------
+// Signal widget store — shared by the statusbar chip + dashboard.
+//
+// Notification modes (user spec, 2026-08-09):
+//   Mode 1 — dashboard view: the /talaria page itself (existing). Opening it
+//     calls markSeen() so the unread badge clears.
+//   Mode 2 — widget view: a statusbar chip (statusBar.right) shows unread
+//     count + last signal while the user works ANYWHERE in Hermes. Clicking
+//     the chip navigates to /talaria.
+//   Mode 3 — notifications: host.notify() in-app toast fires for NEW
+//     qualified signals when the dashboard is NOT the active view. Away-mode
+//     (app closed) is covered by the existing cron → Discord paths.
+//
+// Unread semantics: badge = qualified signals with ts newer than the last
+// time the user SEEN the dashboard. First data ever seen is a baseline (no
+// toast / no backlog). Persisted to localStorage so the badge survives
+// reloads.
+// ---------------------------------------------------------------------------
+const UNREAD_FILE = 'talaria-unread.json'
+const CHIP_POLL_MS = 60 * 1000
+const UNREAD_MAX = 99
+
+// Single persistent toast id — re-notifying with the same id REPLACES the
+// toast in the app's notification stack instead of stacking a new one
+// (store/notifications.ts: `[notification, ...filter(id !== id)]`).
+const SIGNAL_TOAST_ID = 'talaria-signal-toast'
+
+// How many recent signals the widget pane + chip keep (rolling, newest first).
+const RECENT_MAX = 12
+// Display TTL for the widget surfaces — signals older than this are NOT shown
+// in the pane/chip (forex + crypto run 24/7, so a 60-min window stays live).
+// FILTER AT RENDER ONLY — the store keeps everything (user decision 2026-08-10:
+// don't prune the store).
+const SIGNAL_TTL_MS = 60 * 60 * 1000
+// How often the pane re-renders to refresh ages + drop TTL-expired rows even
+// when no new signal arrives (the store only emits on addSignal/markSeen).
+const PANE_TICK_MS = 30 * 1000
+
+// ONE shared poller for the widget surfaces (chip + pane). The dashboard has
+// its own realtime socket; the widget surfaces are always mounted even when
+// the dashboard is not, so they share a single 60s nt_sweep_result poll that
+// feeds signalStore. Guarded so mount/unmount of either surface never
+// double-polls. Returns a cleanup (clears the interval) so the harness's
+// sync useEffect cleanup can dispose it — keeps the node process exit-able.
+let _pollStarted = false
+function startSignalPolling() {
+  if (_pollStarted) return () => {}
+  _pollStarted = true
+  const cfg = loadConfig()
+  if (!cfg.supabase_url || !cfg.supabase_key) return () => {}
+  const poll = async () => {
+    try {
+      // qualified=eq.true: the 20 newest rows are often all cooldown-suppressed
+      // (q=false), which starved the widget of priced rows. Filter server-side
+      // so we always get the newest QUALIFIED signals (same as the notify
+      // watcher), which carry entry/stop/take. (2026-08-10 fix)
+      const rows = await fetchSupabase(cfg, 'nt_sweep_result', {
+        select: 'symbol,signal,effective_kelly,kelly_f,entry_price,stop_loss,take_profit,sweep_timestamp,qualified,regime',
+        qualified: 'eq.true',
+        order: 'sweep_timestamp.desc', limit: '20',
+      })
+      for (const r of (rows || [])) {
+        if (r.qualified && String(r.signal || '').toLowerCase() !== 'neutral' && r.sweep_timestamp) {
+          signalStore.addSignal({
+            symbol: r.symbol,
+            direction: r.signal,
+            kelly: Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0,
+            regime: r.regime,
+            entry: r.entry_price,
+            stop: r.stop_loss,
+            take: r.take_profit,
+            ts: r.sweep_timestamp,
+          })
+        }
+      }
+    } catch (e) { /* silent — poll fallback, next tick */ }
+  }
+  poll()
+  const timer = setInterval(poll, CHIP_POLL_MS)
+  return () => clearInterval(timer)
+}
+
+// Relative-age + UTC formatters for the toast footer ("how current").
+function fmtAge(tsMs) {
+  const diff = Math.max(0, Date.now() - tsMs)
+  const min = Math.floor(diff / 60000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  return `${Math.floor(hr / 24)}d ago`
+}
+function fmtSignalTime(tsMs) {
+  const d = new Date(tsMs)
+  if (isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  // LOCAL wall-clock time + short TZ abbreviation (PDT, EDT, …) via
+  // Intl — the toast footer should read in the user's own timezone, not
+  // UTC (user request 2026-08-09).
+  let tz = ''
+  try {
+    const part = new Intl.DateTimeFormat('en', { timeZoneName: 'short' }).formatToParts(d)
+      .find((p) => p.type === 'timeZoneName')
+    tz = (part && part.value) || ''
+  } catch (e) {}
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}${tz ? ' ' + tz : ''}`
+}
+function fmtToastFooter(tsMs, extra) {
+  const base = `${fmtSignalTime(tsMs)} · ${fmtAge(tsMs)}`
+  return extra ? `${base} · ${extra}` : base
+}
+
+// Friendly regime labels — the raw backend regime strings
+// (low_vol_strong_bull, high_vol_bear, …) are cryptic; map to plain words
+// + an emoji so a user glance reads the market stance. Unknown labels fall
+// back to title-cased underscores.
+const REGIME_FRIENDLY = {
+  low_vol_strong_bull: '🐂 Low-vol strong bull',
+  low_vol_bull: '🐂 Low-vol bull',
+  low_vol_strong_bear: '🐻 Low-vol strong bear',
+  low_vol_bear: '🐻 Low-vol bear',
+  high_vol_strong_bull: '🐂 High-vol strong bull',
+  high_vol_bull: '🐂 High-vol bull',
+  high_vol_strong_bear: '🐻 High-vol strong bear',
+  high_vol_bear: '🐻 High-vol bear',
+  low_vol_range: '↔️ Low-vol range',
+  high_vol_range: '↔️ High-vol range',
+  low_vol_chop: '🔀 Low-vol chop',
+  high_vol_chop: '🔀 High-vol chop',
+  low_vol_strong_trend: '📈 Low-vol strong trend',
+  high_vol_strong_trend: '📈 High-vol strong trend',
+  strong_trend: '📈 Strong trend',
+  range: '↔️ Range',
+  chop: '🔀 Chop',
+}
+function fmtRegime(label) {
+  if (!label) return ''
+  const key = String(label).toLowerCase()
+  if (REGIME_FRIENDLY[key]) return REGIME_FRIENDLY[key]
+  return String(label)
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+// Navigate to a plugin route in the Hermes desktop app.
+//
+// The SDK's `host.navigate('/talaria')` sets `window.location.hash` raw — a
+// fragment assignment fires `hashchange`, but the app's HashRouter (react-router
+// v7, `createHashHistory.listen`) subscribes ONLY to `popstate`. The router
+// never hears the navigation, so nothing happens (verified against
+// react-router dist history.js + the built SDK chunk, 2026-08-10). The app's
+// own surfaces use `useNavigate()` (the real router API); plugins can't, so
+// we dispatch a popstate after setting the hash — the event react-router's
+// handlePop listens for — and the router picks up the new location.
+function navigateTo(path) {
+  try {
+    const target = path.startsWith('#') ? path : `#${path}`
+    if (typeof window === 'undefined') return
+    if (window.location.hash === target) {
+      // Already there — force the router to re-read (a no-op hash set fires
+      // nothing in some builds).
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      return
+    }
+    window.location.hash = target
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  } catch (e) {
+    try { host.navigate(path) } catch (e2) {}
+  }
+}
+
+const signalStore = {
+  watermark: null,     // newest signal ts the user has SEEN (ms epoch)
+  newestTs: null,      // newest signal ts observed (ms epoch)
+  unread: 0,
+  lastSignal: null,    // { symbol, direction, kelly, regime, ts }
+  recent: [],          // rolling list of recent signals (newest first, cap RECENT_MAX)
+  dashboardActive: false,
+  listeners: new Set(),
+  loaded: false,
+  _load() {
+    try {
+      const raw = localStorage.getItem(UNREAD_FILE)
+      if (raw) {
+        const s = JSON.parse(raw)
+        this.watermark = s.watermark != null ? Number(s.watermark) : null
+        this.unread = Number(s.unread) || 0
+        this.lastSignal = s.lastSignal || null
+        this.recent = Array.isArray(s.recent) ? s.recent : []
+      }
+    } catch (e) {}
+    this.loaded = true
+  },
+  _persist() {
+    try {
+      localStorage.setItem(UNREAD_FILE, JSON.stringify({
+        watermark: this.watermark,
+        unread: this.unread,
+        lastSignal: this.lastSignal,
+        recent: this.recent.slice(0, RECENT_MAX),
+      }))
+    } catch (e) {}
+  },
+  _emit() {
+    for (const fn of this.listeners) { try { fn() } catch (e) {} }
+  },
+  subscribe(fn) {
+    if (!this.loaded) this._load()
+    this.listeners.add(fn)
+    try { fn() } catch (e) {}
+    return () => this.listeners.delete(fn)
+  },
+  // Feed a qualified signal from any source (poll, dashboard realtime).
+  addSignal(sig) {
+    if (!this.loaded) this._load()
+    const ts = Date.parse(sig && sig.ts) || 0
+    if (!ts) return
+    // Rolling recent list — dedup by symbol+ts, newest first. When a row
+    // re-appears with price data (e.g. the persisted store predates the
+    // pricing feature), ENRICH the existing entry instead of skipping.
+    const key = `${sig.symbol}|${sig.ts}`
+    const dupIdx = this.recent.findIndex((r) => `${r.symbol}|${r.ts}` === key)
+    const hasPrices = Number(sig.entry) > 0 || Number(sig.stop) > 0 || Number(sig.take) > 0
+    if (dupIdx === -1) {
+      this.recent = [{ symbol: sig.symbol, direction: sig.direction, kelly: sig.kelly, regime: sig.regime, entry: sig.entry, stop: sig.stop, take: sig.take, ts: sig.ts }, ...this.recent].slice(0, RECENT_MAX)
+    } else if (hasPrices) {
+      const prev = this.recent[dupIdx]
+      this.recent[dupIdx] = {
+        ...prev,
+        entry: prev.entry == null ? sig.entry : prev.entry,
+        stop: prev.stop == null ? sig.stop : prev.stop,
+        take: prev.take == null ? sig.take : prev.take,
+      }
+    }
+    // First data ever seen → baseline only (no toast / unread backlog).
+    if (this.watermark == null) {
+      this.watermark = ts
+      this.newestTs = ts
+      this.lastSignal = { symbol: sig.symbol, direction: sig.direction, kelly: sig.kelly, regime: sig.regime, entry: sig.entry, stop: sig.stop, take: sig.take, ts: sig.ts }
+      this._persist()
+      this._emit()
+      return
+    }
+    if (ts > this.newestTs) this.newestTs = ts
+    // Enrich lastSignal prices even on a duplicate (same symbol+ts re-arrives
+    // with price data — e.g. store persisted before the pricing feature).
+    if (hasPrices && this.lastSignal && this.lastSignal.symbol === sig.symbol && this.lastSignal.ts === sig.ts) {
+      const ls = this.lastSignal
+      if (ls.entry == null || ls.stop == null || ls.take == null) {
+        this.lastSignal = {
+          ...ls,
+          entry: ls.entry == null ? sig.entry : ls.entry,
+          stop: ls.stop == null ? sig.stop : ls.stop,
+          take: ls.take == null ? sig.take : ls.take,
+        }
+        this._persist()
+        this._emit()
+      }
+    }
+    if (ts > this.watermark) {
+      if (this.dashboardActive) {
+        // User is viewing the dashboard — the signal is visible live; just
+        // advance the watermark so it never counts as "new" later.
+        this.watermark = ts
+      } else {
+        this.unread = Math.min(UNREAD_MAX, this.unread + 1)
+        this.lastSignal = { symbol: sig.symbol, direction: sig.direction, kelly: sig.kelly, regime: sig.regime, entry: sig.entry, stop: sig.stop, take: sig.take, ts: sig.ts }
+        this._persist()
+        this._emit()
+        // Mode 3: in-app toast when the dashboard is not the active view.
+        // ONE single toast (stable id replaces, never stacks), persistent
+        // until manually dismissed (durationMs 0 — the toast X is always
+        // rendered), with a footer showing signal datetime + age + friendly
+        // regime label.
+        if (host && typeof host.notify === 'function') {
+          const dir = String(sig.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
+          this._toastCount = (this._toastCount || 0) + 1
+          const extra = this._toastCount > 1 ? `+${this._toastCount - 1} more` : ''
+          const regimeLabel = fmtRegime(sig.regime)
+          // ENTRY price in the toast message when available (2026-08-11 —
+          // user flagged the toast showed "old format w/o pricing").
+          const entryLabel = Number(sig.entry) > 0 ? ` · ENTRY ${fmtBrickPrice(sig.entry)}` : ''
+          try {
+            host.notify({
+              id: SIGNAL_TOAST_ID,
+              kind: 'info',
+              title: 'Talaria signal',
+              message: `${sig.symbol} ${dir}${sig.kelly != null ? ' · kelly ' + Number(sig.kelly).toFixed(3) : ''}${entryLabel}`,
+              meta: regimeLabel ? `${fmtToastFooter(ts, extra)} · ${regimeLabel}` : fmtToastFooter(ts, extra),
+              durationMs: 0,
+            })
+          } catch (e) {}
+        }
+      }
+      this._persist()
+      this._emit()
+    }
+  },
+  // User opened the dashboard (or clicked the chip) — clear the badge.
+  markSeen() {
+    if (!this.loaded) this._load()
+    this._toastCount = 0
+    if (this.newestTs != null && (this.watermark == null || this.newestTs > this.watermark)) {
+      this.watermark = this.newestTs
+    }
+    if (this.unread !== 0) {
+      this.unread = 0
+      this._persist()
+      this._emit()
+    }
+  },
+}
+
+// Test hook — lets the node render harness drive the store directly (the
+// harness's useEffect runs cleanup synchronously, so the chip's async poll
+// never resolves there). No-op in the real app.
+if (typeof globalThis !== 'undefined') {
+  try { globalThis.__TALARIA_SIGNAL_STORE__ = signalStore } catch (e) {}
+}
+
+// ---------------------------------------------------------------------------
 // Styles — theme variables only (no hardcoded colors). `tla-` prefix keeps
 // this plugin's classes from colliding with noble-trader-admin's `nta-`.
 // ---------------------------------------------------------------------------
@@ -317,10 +659,11 @@ const CSS = [
   '.tla-hot-chip .tla-hot-sym{font-size:13px;font-weight:700;color:var(--ui-text-primary,#eee);}',
   '.tla-hot-chip .tla-hot-kelly{font-size:11px;font-variant-numeric:tabular-nums;color:var(--ui-text-secondary,#aaa);margin-left:4px;}',
   '.tla-hot-chip .tla-hot-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}',
+  '.tla-hot-chip .tla-hot-regime{font-size:10px;color:var(--ui-text-tertiary,#888);margin-left:2px;white-space:nowrap;}',
   '.tla-hot-buy{background:rgba(76,154,255,0.10);border-color:rgba(76,154,255,0.35);}',
-  '.tla-hot-buy .tla-hot-dir{color:var(--ui-accent,#4c9aff);background:rgba(76,154,255,0.15);}',
+  '.tla-hot-buy .tla-hot-dir{color:#fff;background:#2f6fd6;}',
   '.tla-hot-sell{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);}',
-  '.tla-hot-sell .tla-hot-dir{color:var(--ui-danger,#ff5c5c);background:rgba(255,92,92,0.15);}',
+  '.tla-hot-sell .tla-hot-dir{color:#fff;background:#d64545;}',
   '.tla-err{color:var(--ui-danger,#ff5c5c);font-size:12px;padding:8px;}',
   '.tla-ok{color:#78dc78;font-size:12px;}',
   '.tla-hint{color:var(--ui-text-quaternary,#666);font-size:11px;}',
@@ -347,6 +690,43 @@ const CSS = [
   '.tla-badge.underconfident{background:rgba(120,220,120,0.15);color:#78dc78;}',
   '.tla-badge.calibrated{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary,#888);}',
   '.tla-badge.sig{background:rgba(120,220,120,0.15);color:#78dc78;}',
+  // Statusbar chip (Mode 2 widget) — compact, theme-var only
+  '.tla-chip{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 8px;font-size:11px;font-weight:500;color:var(--ui-text-tertiary,#888);background:transparent;border:none;cursor:pointer;font-family:inherit;letter-spacing:0.02em;}',
+  '.tla-chip:hover{color:var(--ui-text-primary,#eee);background:rgba(127,127,127,0.08);}',
+  '.tla-chip .tla-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-text-quaternary,#777);flex-shrink:0;}',
+  '.tla-chip.tla-chip-hot{color:var(--ui-accent,#4c9aff);font-weight:700;}',
+  '.tla-chip.tla-chip-hot .tla-chip-dot{background:var(--ui-accent,#4c9aff);}',
+  // Side-by-side signals pane (Mode 2 widget — dock right of the chat)
+  '.tla-pane-root{display:flex;flex-direction:column;height:100%;gap:8px;padding:10px;overflow:auto;font-size:12px;}',
+  '.tla-pane-header{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ui-text-primary,#eee);padding-bottom:6px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  '.tla-pane-badge{background:var(--ui-accent,#4c9aff);color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;}',
+  '.tla-pane-open{margin-left:auto;background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-secondary,#aaa);border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;}',
+  '.tla-pane-open:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}',
+  '.tla-pane-last{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;}',
+  '.tla-pane-sym{font-size:14px;font-weight:700;color:var(--ui-text-primary,#eee);}',
+  '.tla-pane-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}',
+  '.tla-pane-buy{color:#fff;background:#2f6fd6;}',
+  '.tla-pane-sell{color:#fff;background:#d64545;}',
+  '.tla-pane-kelly{font-size:11px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;}',
+  '.tla-pane-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}',
+  '.tla-pane-ts{font-size:10px;color:var(--ui-text-quaternary,#777);width:100%;}',
+  '.tla-pane-price{display:flex;flex-wrap:wrap;gap:8px;width:100%;margin-top:4px;font-size:10px;font-variant-numeric:tabular-nums;padding-top:4px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  '.tla-pane-price-entry{color:var(--ui-text-primary,#eee);}',
+  '.tla-pane-price-sl{color:var(--ui-danger,#ff5c5c);}',
+  '.tla-pane-price-tp{color:var(--ui-accent,#4c9aff);}',
+  '.tla-pane-hint{padding:4px 0;}',
+  '.tla-pane-list{display:flex;flex-direction:column;gap:4px;}',
+  '.tla-pane-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;background:transparent;border:1px solid transparent;border-radius:6px;padding:5px 6px;color:var(--ui-text-primary,#eee);cursor:pointer;font-family:inherit;text-align:left;}',
+  '.tla-pane-row:hover{background:rgba(127,127,127,0.08);border-color:var(--ui-stroke-secondary,#2a2a2a);}',
+  // Pricing on every row (2026-08-11): the price line wraps to its own row
+  // under the compact summary (flex-basis 100%), slightly tighter than the
+  // top card's price block.
+  '.tla-pane-price-row{flex-basis:100%;margin-top:2px;padding-top:2px;}',
+  '.tla-pane-row-sym{font-size:12px;font-weight:700;}',
+  '.tla-pane-row-kelly{font-size:10px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;margin-left:auto;}',
+  '.tla-pane-row-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}',
+  '.tla-pane-row-ts{font-size:10px;color:var(--ui-text-quaternary,#777);}',
+  '.tla-pane-foot{font-size:9px;color:var(--ui-text-quaternary,#666);margin-top:auto;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
 ].join('')
 
 function ensureStyle() {
@@ -731,6 +1111,7 @@ function HotSignalsBanner({ signals }) {
     React.createElement('div', { className: 'tla-hot' },
       hot.map((h) => {
         const sell = String(h.direction || '').toLowerCase() === 'sell'
+        const regimeLabel = fmtRegime(h.regime)
         return React.createElement('div', {
           key: h.symbol + (h.ts || ''),
           className: cn('tla-hot-chip', sell ? 'tla-hot-sell' : 'tla-hot-buy'),
@@ -738,6 +1119,7 @@ function HotSignalsBanner({ signals }) {
           React.createElement('span', { className: 'tla-hot-sym' }, h.symbol),
           React.createElement('span', { className: 'tla-hot-dir' }, sell ? 'Sell' : 'Buy'),
           React.createElement('span', { className: 'tla-hot-kelly' }, `kelly ${Number(h.kelly || 0).toFixed(3)}`),
+          regimeLabel ? React.createElement('span', { className: 'tla-hot-regime', title: 'Market regime' }, regimeLabel) : null,
         )
       }),
     ),
@@ -849,43 +1231,19 @@ function PaperSection({ positions, equity, events }) {
 }
 
 // ---------------------------------------------------------------------------
-// Connect tab — Supabase URL + public anon key + claim token.
-// Save triggers the talaria-check; inline result shows ok / 401 / 404
+// Connect tab — claim token only (Option A, 2026-08-10). The Supabase URL +
+// public anon key are embedded service defaults (DEFAULT_SUPABASE_URL /
+// DEFAULT_ANON_KEY) and are never shown to the user. Save triggers the
+// talaria-check; inline result shows ok / 401 / 404
 // ('claim service not deployed') states.
 // ---------------------------------------------------------------------------
 function ConnectTab({ config, onSave, checkPhase, checkMsg }) {
-  const [url, setUrl] = React.useState(config.supabase_url || '')
-  const [key, setKey] = React.useState(config.supabase_key || '')
   const [token, setToken] = React.useState(config.claim_token || '')
-  const [testing, setTesting] = React.useState(false)
-  const [testResult, setTestResult] = React.useState(null)
-
-  const testConnection = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const base = url.replace(/\/+$/, '')
-      const resp = await fetch(`${base}/rest/v1/nt_symbol?select=symbol&limit=1`, {
-        headers: {
-          'apikey': key,
-          'Authorization': `Bearer ${key}`,
-          'Accept': 'application/json',
-        },
-      })
-      if (!resp.ok) {
-        setTestResult({ ok: false, msg: `${resp.status} ${resp.statusText}` })
-      } else {
-        setTestResult({ ok: true, msg: 'Connected — Supabase reachable' })
-      }
-    } catch (err) {
-      setTestResult({ ok: false, msg: String(err.message || err) })
-    } finally {
-      setTesting(false)
-    }
-  }
 
   const save = () => {
-    onSave({ supabase_url: url.trim(), supabase_key: key.trim(), claim_token: token.trim() })
+    // Service URL + anon key are embedded defaults — only the user's claim
+    // token is personal. (2026-08-10: Option A — hide the pre-filled fields.)
+    onSave({ claim_token: token.trim() })
   }
 
   const statusEls = []
@@ -907,22 +1265,7 @@ function ConnectTab({ config, onSave, checkPhase, checkMsg }) {
     React.createElement('div', { className: 'tla-card' },
       React.createElement('h3', null, 'Talaria — Connect'),
       React.createElement('div', { className: 'tla-hint' },
-        'Enter the Supabase project URL, the PUBLIC anon key and your claim token. The token is validated against the talaria-check Edge Function (live subscription status, re-checked every 24h). The plugin reads signals DIRECTLY from Supabase — no backend needed on your machine.'),
-      React.createElement('div', { className: 'tla-field' },
-        React.createElement('label', null, 'Supabase URL'),
-        React.createElement('input', {
-          value: url,
-          placeholder: 'https://<project>.supabase.co',
-          onChange: (e) => setUrl(e.target.value),
-        })),
-      React.createElement('div', { className: 'tla-field' },
-        React.createElement('label', null, 'Supabase anon/public key'),
-        React.createElement('input', {
-          value: key,
-          type: 'password',
-          placeholder: 'sb_publishable_...',
-          onChange: (e) => setKey(e.target.value),
-        })),
+        'Enter the claim token from the Talaria portal. The token is validated against the talaria-check Edge Function (live subscription status, re-checked every 24h). The service connection is pre-configured.'),
       React.createElement('div', { className: 'tla-field' },
         React.createElement('label', null, 'Claim token'),
         React.createElement('input', {
@@ -932,15 +1275,27 @@ function ConnectTab({ config, onSave, checkPhase, checkMsg }) {
           onChange: (e) => setToken(e.target.value),
         })),
       React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-        React.createElement('button', { className: cn('tla-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm'), onClick: save }, 'Save & Validate'),
         React.createElement('button', {
-          className: cn('tla-btn', 'tla-btn-secondary', 'dui-btn', 'dui-btn-ghost', 'dui-btn-sm'), onClick: testConnection, disabled: testing,
-        }, testing ? 'Testing…' : 'Test connection'),
+          type: 'button',
+          className: 'tla-btn',
+          // Explicit inline style so the button ALWAYS renders as a solid
+          // clickable button — the daisyUI bundle has no theme layer here
+          // (--p/--b2 undefined), so dui-btn-primary's oklch background is
+          // invalid and the button can render as plain text. (2026-08-10)
+          style: {
+            background: 'var(--ui-accent,#4c9aff)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '8px 16px',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          },
+          onClick: save,
+        }, 'Save & Validate'),
       ),
-      testResult && React.createElement('div', {
-        className: testResult.ok ? 'tla-ok' : 'tla-err',
-        style: { marginTop: 8 },
-      }, testResult.msg),
       statusEls,
     ),
   )
@@ -1272,9 +1627,24 @@ function TalariaDashboard({ config, claim }) {
   // Live Realtime socket (open-tab-only — closed on unmount; the REST polls
   // above keep the dashboard alive on socket error/close).
   const wsState = useRealtime(config, connected, claim.plan_slug, {
-    onSignal: (s) => setLiveSignals((prev) => [s, ...prev].slice(0, 50)),
+    onSignal: (s) => {
+      setLiveSignals((prev) => [s, ...prev].slice(0, 50))
+      // Feed the shared widget store too — a live signal while the dashboard
+      // is open advances the watermark (no badge), but the store is the
+      // source of truth for the statusbar chip + toasts.
+      signalStore.addSignal(s)
+    },
     onPaper: (p) => setPaperEvents((prev) => [p, ...prev].slice(0, 50)),
   })
+
+  // Mode 1: opening the dashboard marks all current signals seen (badge
+  // clears). Mark dashboardActive so addSignal advances watermark instead of
+  // counting unread while the user is looking at the dashboard.
+  React.useEffect(() => {
+    signalStore.dashboardActive = true
+    signalStore.markSeen()
+    return () => { signalStore.dashboardActive = false }
+  }, [])
 
   // Hot-signal banner: live broadcasts + seed rows (qualified, non-neutral,
   // kelly present), deduped by symbol+ts, live first.
@@ -1285,6 +1655,7 @@ function TalariaDashboard({ config, claim }) {
         symbol: r.symbol,
         direction: r.signal,
         kelly: Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0,
+        regime: r.regime,
         ts: r.sweep_timestamp,
       })
     }
@@ -1297,6 +1668,17 @@ function TalariaDashboard({ config, claim }) {
       if (!seen[k]) { seen[k] = true; bannerSignals.push(s) }
     }
   }
+  // HOT WINDOW COUNT (2026-08-11): the "Hot signals" stat previously showed
+  // bannerSignals.length — ALL qualified rows in the 200-row sweep fetch,
+  // which can span hours → "16 hot signals" while the banner itself said
+  // "5 in 10m window". Now it counts only signals within HOT_TTL_MS of the
+  // newest, matching the banner's "N in 10m window" (user: 16 not correct).
+  const hotWindowCount = bannerSignals.length
+    ? bannerSignals.filter((s) => {
+        const newest = Math.max(...bannerSignals.map((x) => Date.parse(x.ts) || 0))
+        return newest && (Date.parse(s.ts) || 0) >= newest - HOT_TTL_MS
+      }).length
+    : 0
 
   // Kelly histogram — latest per symbol (fetch is sweep_timestamp desc, so
   // first occurrence per symbol is the newest).
@@ -1395,7 +1777,7 @@ function TalariaDashboard({ config, claim }) {
       }),
       React.createElement(StatCard, {
         title: 'Hot signals',
-        value: String(bannerSignals.length || 0),
+        value: String(hotWindowCount || 0),
         sub: 'qualified · 10m TTL · top 5',
       }),
     ),
@@ -1627,7 +2009,206 @@ function TalariaDashboard({ config, claim }) {
     ) : null,
 
     React.createElement('div', { className: 'tla-hint' },
-      'Copyright - Lexington Tech LLC'),
+      `Talaria v${PLUGIN_VERSION} · Copyright - Lexington Tech LLC`),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Talaria signals pane — the side-by-side WIDGET (Mode 2).
+//
+// A dockable pane (`area: 'panes'`) that sits beside the chat session — the
+// SDK pattern from the Hermes desktop widgets video (2026-08-09): register a
+// pane with placement/dock instead of a full /route dashboard page. Shows the
+// live signal feed from the shared signalStore: unread badge, last signal
+// (with friendly regime + freshness), and a rolling list of recent signals.
+// Clicking a row navigates to the full /talaria dashboard.
+// ---------------------------------------------------------------------------
+function TalariaSignalsPane() {
+  const [snap, setSnap] = React.useState(() => ({
+    unread: signalStore.unread,
+    lastSignal: signalStore.lastSignal,
+    recent: signalStore.recent,
+  }))
+  // Tick: refresh ages + drop TTL-expired rows even when no new signal
+  // arrives (the store only emits on addSignal/markSeen).
+  const [, setTick] = React.useState(0)
+
+  React.useEffect(() => {
+    return signalStore.subscribe(() => {
+      setSnap({
+        unread: signalStore.unread,
+        lastSignal: signalStore.lastSignal,
+        recent: signalStore.recent,
+      })
+    })
+  }, [])
+
+  React.useEffect(() => {
+    return startSignalPolling()
+  }, [])
+
+  React.useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), PANE_TICK_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  const now = Date.now()
+  const unread = snap.unread || 0
+  const last = snap.lastSignal
+  const recent = snap.recent || []
+  const lastTs = last && Date.parse(last.ts)
+  const dir = last && String(last.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
+  // TTL: only show signals within the last 60 min (render-time filter — the
+  // store keeps everything, per user decision 2026-08-10).
+  const lastFresh = last && lastTs && (now - lastTs) <= SIGNAL_TTL_MS
+  const rows = recent
+    .filter((r) => Date.parse(r.ts) && (now - Date.parse(r.ts)) <= SIGNAL_TTL_MS)
+    .slice(0, RECENT_MAX)
+  // LIVE COUNT (2026-08-11): the badge reflects the number of LIVE qualified
+  // signals (TTL-fresh rows), NOT the accumulated unread counter (which was
+  // capped at 99 and never decayed — "99 new" was meaningless). Rows may be
+  // fewer than all live signals when more than RECENT_MAX are fresh.
+  const liveCount = rows.length
+
+  const lastPriceLine = lastFresh && last &&
+    (Number(last.entry) > 0 || Number(last.stop) > 0 || Number(last.take) > 0)
+
+  return React.createElement('div', { className: 'tla-pane-root' },
+    React.createElement('div', { className: 'tla-pane-header' },
+      React.createElement('span', null, 'Talaria signals'),
+      liveCount > 0
+        ? React.createElement('span', { className: 'tla-pane-badge', title: `${liveCount} live qualified signal(s) in the last 60m` }, `${liveCount} live`)
+        : null,
+      React.createElement('button', {
+        type: 'button',
+        className: 'tla-pane-open',
+        title: 'Open full dashboard',
+        onClick: () => { signalStore.markSeen(); navigateTo('/talaria') },
+      }, 'Open'),
+    ),
+    lastFresh && last
+      ? React.createElement('div', { className: 'tla-pane-last' },
+          React.createElement('span', { className: 'tla-pane-sym' }, last.symbol),
+          React.createElement('span', {
+            className: cn('tla-pane-dir', String(last.direction || '').toLowerCase() === 'sell' ? 'tla-pane-sell' : 'tla-pane-buy'),
+          }, dir),
+          last.kelly != null ? React.createElement('span', { className: 'tla-pane-kelly' }, `kelly ${Number(last.kelly).toFixed(3)}`) : null,
+          last.regime ? React.createElement('span', { className: 'tla-pane-regime', title: 'Market regime' }, fmtRegime(last.regime)) : null,
+          React.createElement('span', { className: 'tla-pane-ts' }, `${fmtSignalTime(lastTs)} · ${fmtAge(lastTs)}`),
+          lastPriceLine
+            ? React.createElement('div', { className: 'tla-pane-price' },
+                Number(last.entry) > 0 ? React.createElement('span', { className: 'tla-pane-price-entry' }, `ENTRY ${fmtBrickPrice(last.entry)}`) : null,
+                Number(last.stop) > 0 ? React.createElement('span', { className: 'tla-pane-price-sl' }, `SL ${fmtBrickPrice(last.stop)}`) : null,
+                Number(last.take) > 0 ? React.createElement('span', { className: 'tla-pane-price-tp' }, `TP ${fmtBrickPrice(last.take)}`) : null,
+              )
+            : null,
+        )
+      : React.createElement('div', { className: 'tla-hint tla-pane-hint' },
+          'No recent signals — new qualified signals appear here live.'),
+    rows.length
+      ? React.createElement('div', { className: 'tla-pane-list' },
+          rows.map((r) => {
+            const rTs = Date.parse(r.ts)
+            const rDir = String(r.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
+            const rPriceLine = Number(r.entry) > 0 || Number(r.stop) > 0 || Number(r.take) > 0
+            return React.createElement('button', {
+              key: r.symbol + '|' + r.ts,
+              type: 'button',
+              className: 'tla-pane-row',
+              title: `${r.symbol} ${rDir}${r.regime ? ' · ' + fmtRegime(r.regime) : ''} · ${fmtSignalTime(rTs)} (${fmtAge(rTs)})`,
+              onClick: () => { signalStore.markSeen(); navigateTo('/talaria') },
+            },
+              React.createElement('span', { className: 'tla-pane-row-sym' }, r.symbol),
+              React.createElement('span', {
+                className: cn('tla-pane-dir', String(r.direction || '').toLowerCase() === 'sell' ? 'tla-pane-sell' : 'tla-pane-buy'),
+              }, rDir),
+              React.createElement('span', { className: 'tla-pane-row-kelly' }, r.kelly != null ? `k${Number(r.kelly).toFixed(3)}` : ''),
+              React.createElement('span', { className: 'tla-pane-row-regime' }, r.regime ? fmtRegime(r.regime) : ''),
+              React.createElement('span', { className: 'tla-pane-row-ts' }, rTs ? fmtAge(rTs) : ''),
+              // Pricing on EVERY row (2026-08-11 — user: only the top signal
+              // showed pricing; add ENTRY/SL/TP to all displayed signals).
+              rPriceLine
+                ? React.createElement('div', { className: 'tla-pane-price tla-pane-price-row' },
+                    Number(r.entry) > 0 ? React.createElement('span', { className: 'tla-pane-price-entry' }, `ENTRY ${fmtBrickPrice(r.entry)}`) : null,
+                    Number(r.stop) > 0 ? React.createElement('span', { className: 'tla-pane-price-sl' }, `SL ${fmtBrickPrice(r.stop)}`) : null,
+                    Number(r.take) > 0 ? React.createElement('span', { className: 'tla-pane-price-tp' }, `TP ${fmtBrickPrice(r.take)}`) : null,
+                  )
+                : null,
+            )
+          }),
+        )
+      : null,
+    React.createElement('div', { className: 'tla-pane-foot' },
+      `Talaria v${PLUGIN_VERSION} · Lexington Tech LLC`),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Statusbar chip (Mode 2 widget + Mode 3 in-app toast driver).
+//
+// Reads the shared signalStore (fed by the singleton startSignalPolling poll
+// + dashboard realtime). Click → navigate to /talaria + clear the badge.
+// ---------------------------------------------------------------------------
+function TalariaChip() {
+  const [snap, setSnap] = React.useState(() => ({
+    unread: signalStore.unread,
+    lastSignal: signalStore.lastSignal,
+    recent: signalStore.recent,
+  }))
+
+  // Subscribe to the shared store (badge/label update on signal or markSeen).
+  React.useEffect(() => {
+    return signalStore.subscribe(() => {
+      setSnap({ unread: signalStore.unread, lastSignal: signalStore.lastSignal, recent: signalStore.recent })
+    })
+  }, [])
+
+  // Start the shared 60s poll (idempotent — pane + chip share one poll).
+  React.useEffect(() => {
+    return startSignalPolling()
+  }, [])
+
+  // Tick: refresh the age label + drop stale (TTL-expired) last signal even
+  // when no new signal arrives.
+  const [, setTick] = React.useState(0)
+  React.useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), PANE_TICK_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  const now = Date.now()
+  const unread = snap.unread || 0
+  const last = snap.lastSignal
+  const lastTs = last && Date.parse(last.ts)
+  // TTL: a last signal older than 60 min is stale → chip goes neutral (the
+  // unread badge still counts unseen signals, per user decision 2026-08-10).
+  const lastFresh = last && lastTs && (now - lastTs) <= SIGNAL_TTL_MS
+  const dir = last && String(last.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
+  const ageLabel = lastFresh && lastTs ? fmtAge(lastTs) : ''
+  // LIVE COUNT (2026-08-11): same as the pane — the chip badge reflects LIVE
+  // qualified signals (TTL-fresh recent rows), NOT the accumulated unread
+  // counter (which capped at 99 and never decayed).
+  const liveCount = ((snap.recent || []).filter((r) => Date.parse(r.ts) && (now - Date.parse(r.ts)) <= SIGNAL_TTL_MS)).length
+  const regimeLabel = lastFresh && last && last.regime ? fmtRegime(last.regime) : ''
+  const label = liveCount > 0
+    ? `Talaria · ${liveCount}`
+    : lastFresh && last
+      ? `Talaria · ${last.symbol} ${dir}${ageLabel ? ' · ' + ageLabel : ''}`
+      : 'Talaria'
+
+  return React.createElement('button', {
+    type: 'button',
+    className: cn('tla-chip', liveCount > 0 ? 'tla-chip-hot' : ''),
+    title: 'Talaria — open signal dashboard' + (lastFresh && last && lastTs
+      ? ` · ${last.symbol} ${dir} · ${fmtSignalTime(lastTs)} (${ageLabel})${regimeLabel ? ' · ' + regimeLabel : ''}`
+      : ''),
+    onClick: () => {
+      signalStore.markSeen()
+      navigateTo('/talaria')
+    },
+  },
+    React.createElement('span', { className: 'tla-chip-dot' }),
+    label,
   )
 }
 
@@ -1733,6 +2314,25 @@ const plugin = {
         area: SIDEBAR_NAV_AREA,
         order: 50,
         data: { codicon: 'graph-line', label: 'Talaria', path: '/talaria' },
+      },
+      {
+        // Mode 2 widget — always-visible statusbar chip (unread badge +
+        // last signal). Independent 60s poll keeps it live while the
+        // dashboard socket is closed.
+        id: 'chip',
+        area: 'statusBar.right',
+        order: 55,
+        render: () => React.createElement(TalariaChip, null),
+      },
+      {
+        // Mode 2 widget — side-by-side pane (dock right of the chat
+        // session, like the Hermes desktop widgets video). Compact live
+        // signal feed; click a row → full /talaria dashboard.
+        id: 'signals-pane',
+        area: 'panes',
+        title: 'Talaria signals',
+        data: { placement: 'right', dock: { pane: 'workspace', pos: 'right' }, width: '300px' },
+        render: () => React.createElement(TalariaSignalsPane, null),
       },
     ])
   },
