@@ -27,11 +27,11 @@ action behind each signal:
 
 ---
 
-## What's in this release (v0.2.0)
+## What's in this release (v0.2.2)
 
 | Component | What it is |
 |---|---|
-| **Talaria desktop plugin** | Native Hermes Desktop page: live hot signals, renko brick charts (hover for prices), per-symbol signal health, paper book + portfolio analytics, 60s auto-refresh + realtime updates |
+| **Talaria desktop plugin** | Native Hermes Desktop page: live hot signals, renko brick charts (hover for prices), per-symbol signal health, paper book + portfolio analytics, 60s auto-refresh + realtime updates. **v0.2.2 widget:** live qualified-signal badge (pane shows `N live`, chip shows `Talaria · N`), ENTRY/SL/TP pricing on EVERY displayed signal, ENTRY price in toasts, 10-min TTL hot-signal count, plugin version shown in footers |
 | **talaria-tools** | In-chat agent tools — `talaria_health`, `talaria_stats`, `talaria_calibration` — so your Hermes agent can answer "what does this signal mean?" |
 | **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
 | **Signal notifier + daily digest** | Optional Hermes cron scripts that deliver new signals to whatever messaging you've connected |
@@ -75,8 +75,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.0.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.0.zip
+# Download talaria-plugin-v0.2.2.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.2.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
@@ -174,8 +174,9 @@ yours.
 
 After connecting, enable the **Talaria signals** pane (Settings → Plugins →
 Talaria). A live widget docks to the right of your chat session showing the
-latest signal with its ENTRY / SL / TP levels, unread count, and a rolling
-list of recent signals (last 60 minutes). Click a signal → full dashboard.
+latest signal with its ENTRY / SL / TP levels, a live qualified-signal count
+(every row shows ENTRY / SL / TP), and a rolling list of recent signals
+(last 60 minutes). Click a signal → full dashboard.
 You can drag or resize the pane; it stays live while you work anywhere in
 Hermes.
 
@@ -230,8 +231,8 @@ at answering Talaria questions over time.
 **6. Keep it fresh**
 
 The dashboard auto-refreshes every 60s and streams live when available. The
-widget pane shows only the last 60 minutes of signals; unread counts clear
-when you open the dashboard.
+widget pane shows only the last 60 minutes of signals; the badge counts live
+qualified signals and clears when the last signal ages out.
 
 ## Docs
 
