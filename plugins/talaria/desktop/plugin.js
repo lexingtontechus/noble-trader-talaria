@@ -39,7 +39,7 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 
 // Plugin version — bumped per release. Shown in the pane + dashboard footers
 // so the deployed build is verifiable in-app (2026-08-11).
-const PLUGIN_VERSION = '0.2.3'
+const PLUGIN_VERSION = '0.2.4'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every

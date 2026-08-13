@@ -27,6 +27,26 @@ action behind each signal:
 
 ---
 
+## What's in this release (v0.2.4)
+
+**Kelly table redesign + group header fix + null context + admin plugin.**
+
+| Change | Detail |
+|---|---|
+| **Kelly table redesign** | The "Kelly by symbol" panel in both talaria and admin plugins has been converted from an HBar histogram to a **table format**. Moved below "Markov + pattern". Displays latest nt_sweep_result per symbol, grouped by asset class and sorted by symbol. New columns: aggression, markov_p_up, markov_p_dn, regime_shift, prev_regime. Brick columns and excluded fields (n_trades, profit_factor, sweep_window, sweep_duration, source, venue, error, total_return, annual_return, sweep_timestamp) are hidden. |
+| **Below-table context cards** | 3 inline StatCards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. |
+| **Group header fix** | Group headers now render as a separate full-width row instead of an inline cell within the first data row. Previously, the first symbol's symbol cell was replaced by the group label, causing that symbol to disappear from the table. |
+| **Null record context** | Added explanatory text to the panel description: rows with `—` dashes in signal/price columns represent symbols whose latest sweep did NOT qualify (qualified=false). Regime, aggression, and prev_regime are still current; only signal-dependent fields are blank. |
+| **Fetch select expansion** | Both plugins now fetch `aggression, regime_shift, prev_regime, p_win, ev, p_timesfm, size_mult` from `nt_sweep_result` for the Kelly table. |
+| **Helper functions** | `AGGRESSION_FRIENDLY` map (🔥⚡🎯), `fmtAggression()`, `fmtPwin()`, `fmtKellyPct()`, `fmtRegimeShort()` added to both plugins. |
+
+**Deploy:** `talaria-plugin-v0.2.4.zip` release archive available.
+
+
+---
+
+---
+
 ## What's in this release (v0.2.3)
 
 **Plan-scoped realtime channels + channel rename.**
@@ -45,22 +65,6 @@ action behind each signal:
 your Talaria dashboard renders them in real time.
 
 ---
-
-## What's in this release (v0.2.4)
-
-**Kelly table redesign + group header fix + null context + admin plugin.**
-
-| Change | Detail |
-|---|---|
-| **Kelly table redesign** | The "Kelly by symbol" panel in both talaria and admin plugins has been converted from an HBar histogram to a **table format**. Moved below "Markov + pattern". Displays latest nt_sweep_result per symbol, grouped by asset class and sorted by symbol. New columns: aggression, markov_p_up, markov_p_dn, regime_shift, prev_regime. Brick columns and excluded fields (n_trades, profit_factor, sweep_window, sweep_duration, source, venue, error, total_return, annual_return, sweep_timestamp) are hidden. |
-| **Below-table context cards** | 3 inline StatCards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. |
-| **Group header fix** | Group headers now render as a separate full-width row instead of an inline cell within the first data row. Previously, the first symbol's symbol cell was replaced by the group label, causing that symbol to disappear from the table. |
-| **Null record context** | Added explanatory text to the panel description: rows with `—` dashes in signal/price columns represent symbols whose latest sweep did NOT qualify (qualified=false). Regime, aggression, and prev_regime are still current; only signal-dependent fields are blank. |
-| **Fetch select expansion** | Both plugins now fetch `aggression, regime_shift, prev_regime, p_win, ev, p_timesfm, size_mult` from `nt_sweep_result` for the Kelly table. |
-| **Helper functions** | `AGGRESSION_FRIENDLY` map (🔥⚡🎯), `fmtAggression()`, `fmtPwin()`, `fmtKellyPct()`, `fmtRegimeShort()` added to both plugins. |
-
-**Deploy:** `talaria-plugin-v0.2.4.zip` release archive available.
-
 
 ## What's in this release (v0.2.2)
 
@@ -106,8 +110,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.3.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.3.zip
+# Download talaria-plugin-v0.2.4.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.4.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \

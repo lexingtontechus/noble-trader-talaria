@@ -519,7 +519,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.3')), 'pane footer shows plugin version v0.2.3')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.4')), 'pane footer shows plugin version v0.2.4')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice
