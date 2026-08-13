@@ -87,9 +87,9 @@ globalThis.fetch = async (url) => {
   }
   if (u.includes('/rest/v1/nt_sweep_result')) {
     return jsonResp([
-      { symbol: 'XAUUSD', signal: 'buy', effective_kelly: 0.24, kelly_f: 0.24, entry_price: 4090.5, stop_loss: 4085.0, take_profit: 4102.0, sweep_timestamp: nowIso(), regime: 'strong_trend', qualified: true },
-      { symbol: 'EURUSD', signal: 'sell', effective_kelly: 0.18, kelly_f: 0.18, entry_price: 1.0845, stop_loss: 1.0875, take_profit: 1.079, sweep_timestamp: nowIso(), regime: 'low_vol_range', qualified: true },
-      { symbol: 'BTCUSD', signal: 'neutral', effective_kelly: null, kelly_f: null, entry_price: null, stop_loss: null, take_profit: null, sweep_timestamp: nowIso(), regime: 'high_vol_chop', qualified: false },
+      { symbol: 'XAUUSD', signal: 'buy', effective_kelly: 0.24, kelly_f: 0.24, entry_price: 4090.5, stop_loss: 4085.0, take_profit: 4102.0, sweep_timestamp: nowIso(), regime: 'low_vol_strong_bull', qualified: true, regime_conf: 0.9, markov_p_up: 0.62, markov_p_dn: 0.38, p_win: 0.6, ev: 0.42, p_timesfm: 0.58, aggression: 'aggressive', regime_shift: true, prev_regime: 'high_vol_bear', size_mult: 1.2 },
+      { symbol: 'EURUSD', signal: 'sell', effective_kelly: 0.18, kelly_f: 0.18, entry_price: 1.0845, stop_loss: 1.0875, take_profit: 1.079, sweep_timestamp: nowIso(), regime: 'low_vol_range', qualified: true, regime_conf: 0.8, markov_p_up: 0.35, markov_p_dn: 0.65, p_win: 0.42, ev: -0.18, p_timesfm: 0.31, aggression: 'passive', regime_shift: false, prev_regime: 'low_vol_strong_bull', size_mult: 0.6 },
+      { symbol: 'BTCUSD', signal: 'neutral', effective_kelly: null, kelly_f: null, entry_price: null, stop_loss: null, take_profit: null, sweep_timestamp: nowIso(), regime: 'high_vol_chop', qualified: false, regime_conf: 0.5, markov_p_up: null, markov_p_dn: null, p_win: null, ev: null, p_timesfm: null, aggression: 'mid', regime_shift: null, prev_regime: null, size_mult: null },
     ])
   }
   if (u.includes('/rest/v1/nt_renko_bricks')) {
@@ -607,7 +607,19 @@ assert(acc.texts.some((x) => x.includes('Talaria By Noble Trading App')), 'dashb
   assert(acc.texts.some((x) => x.includes('Copyright - Lexington Tech LLC')), 'dashboard root renders (footer copyright present)')
 assert(hasText('Hot signals'), 'hot-signal banner + stat render')
 assert(acc.classes.some((c) => c.includes('tla-hot-card')), 'banner visible (seed signal within 10m TTL)')
-assert(hasText('Kelly by symbol'), 'kelly histogram card renders')
+assert(hasText('Kelly by symbol'), 'kelly table panel renders (replaced histogram)')
+assert(hasText('Aggression'), 'kelly table header shows Aggression column')
+assert(hasText('Markov P(up)'), 'kelly table header shows Markov P(up) column')
+assert(hasText('Markov P(dn)'), 'kelly table header shows Markov P(dn) column')
+assert(hasText('Prev regime'), 'kelly table header shows Prev regime column')
+assert(hasText('P_win'), 'kelly table header shows P_win column')
+assert(hasText('TimesFM'), 'kelly table header shows TimesFM column')
+// Below-table context cards must show TimesFM / EV / P_win for most-qualified symbol (XAUUSD)
+assert(acc.texts.some((x) => x.includes('TimesFM forecast — XAUUSD')), 'below-table context: TimesFM forecast card renders for qualified symbol')
+assert(acc.texts.some((x) => x.includes('EV — XAUUSD')), 'below-table context: EV card renders for qualified symbol')
+assert(acc.texts.some((x) => x.includes('P_win — XAUUSD')), 'below-table context: P_win card renders for qualified symbol')
+// XAUUSD (most-qualified) has p_timesfm=0.58 → context card shows forecast, not unavailable
+assert(acc.texts.some((x) => x.includes('📈')), 'below-table context: TimesFM card shows bullish forecast for XAUUSD')
 assert(hasText('Renko bricks'), 'renko chart card renders')
 assert(hasText('10 bricks'), 'renko chart window hint renders')
 assert(hasText('levels:'), 'renko pricing legend row renders (all symbols)')

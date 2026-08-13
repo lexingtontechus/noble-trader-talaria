@@ -461,6 +461,168 @@ function fmtRegime(label) {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+// Aggression label + emoji map (mirrors discord.py signal delivery, 2026-08-08).
+const AGGRESSION_FRIENDLY = {
+  passive: '🎯 Patient',
+  mid: '⚡ Normal',
+  aggressive: '🔥 Aggressive',
+}
+function fmtAggression(label) {
+  if (!label) return '—'
+  const key = String(label).toLowerCase()
+  if (AGGRESSION_FRIENDLY[key]) return AGGRESSION_FRIENDLY[key]
+  return String(label).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+function fmtRegimeShort(label) {
+  if (!label) return '—'
+  const full = fmtRegime(label)
+  if (full.length > 18) return full.slice(0, 17) + '…'
+  return full
+}
+function fmtKellyPct(v) {
+  if (v == null || isNaN(Number(v))) return '—'
+  const n = Number(v)
+  return n >= 0 ? `+${(n * 100).toFixed(1)}%` : `${(n * 100).toFixed(1)}%`
+}
+function fmtPwinColor(v) {
+  const n = Number(v)
+  if (n >= 0.6) return '#26d374'
+  if (n <= 0.4) return '#ff5c5c'
+  return 'var(--ui-text-tertiary,#888)'
+}
+function fmtEvColor(v) {
+  const n = Number(v)
+  if (n > 0) return 'var(--ui-accent,#4c9aff)'
+  if (n < 0) return '#ff5c5c'
+  return 'var(--ui-text-tertiary,#888)'
+}
+
+// Kelly by symbol — latest sweep TABLE component (2026-08-12 redesign).
+// Groups nt_sweep_result rows by asset_class, deduped to latest per symbol,
+// sorted by symbol ASC within each class. Excludes brick_* columns.
+const CLASS_ORDER_TALARIA = { crypto: 0, forex: 1, commodities: 2, stocks: 3, other: 4 }
+const CLASS_LABEL_TALARIA = {
+  crypto: 'Cryptocurrency  💱',
+  forex: 'Forex  📊',
+  commodities: 'Commodities  🏦',
+  stocks: 'Stocks  📈',
+  other: 'Other',
+}
+function TalariaKellyTable({ sweeps, symbols }) {
+  const latestBySym = {}
+  for (const r of (sweeps.data || [])) { if (!latestBySym[r.symbol]) latestBySym[r.symbol] = r }
+  const rows = Object.values(latestBySym)
+
+  const assetClassOf = {}
+  for (const r of (symbols.data || [])) assetClassOf[r.symbol] = r.asset_class || 'other'
+  const groups = {}
+  for (const r of rows) {
+    const cls = assetClassOf[r.symbol] || 'other'
+    if (!groups[cls]) groups[cls] = []
+    groups[cls].push(r)
+  }
+  const classOrder = Object.keys(groups).sort((a, b) => (CLASS_ORDER_TALARIA[a] || 99) - (CLASS_ORDER_TALARIA[b] || 99))
+
+  const THEAD = [
+    { k: 'regime',      label: 'Regime',          cls: 'tla-regime-cell' },
+    { k: 'aggression',  label: 'Aggression',      cls: 'tla-agg-cell' },
+    { k: 'markov_p_up', label: 'Markov P(up)',    cls: 'tla-pwin-cell' },
+    { k: 'markov_p_dn', label: 'Markov P(dn)',    cls: 'tla-pwin-cell' },
+    { k: 'shift',       label: 'Shift',           cls: 'tla-shift-cell' },
+    { k: 'prev_regime', label: 'Prev regime',     cls: 'tla-prev-cell' },
+    { k: 'signal',      label: 'Signal',          cls: 'tla-sig-cell' },
+    { k: 'kelly',       label: 'Effective kelly', cls: 'tla-kelly-cell' },
+    { k: 'kelly_f',     label: 'kelly_f',         cls: 'tla-kelly-fCell' },
+    { k: 'p_win',       label: 'P_win',           cls: 'tla-pwin-cell' },
+    { k: 'ev',          label: 'EV',              cls: 'tla-ev-cell' },
+    { k: 'entry',       label: 'ENTRY',           cls: 'tla-price-cell' },
+    { k: 'stop_loss',   label: 'SL',              cls: 'tla-price-cell' },
+    { k: 'take_profit', label: 'TP',              cls: 'tla-price-cell' },
+    { k: 'conf',        label: 'Conf',            cls: 'tla-conf-cell' },
+    { k: 'timesfm',     label: 'TimesFM',         cls: 'tla-conf-cell' },
+    { k: 'size_mult',   label: 'Size',            cls: 'tla-sizemult-cell' },
+  ]
+
+  const ctxRow = rows.find((r) => r.qualified) || rows[0] || {}
+
+  return React.createElement('div', { className: 'tla-kelly-table-wrap' },
+    React.createElement('table', { className: 'tla-table tla-kelly-table' },
+      React.createElement('thead', null,
+        React.createElement('tr', null,
+          React.createElement('th', { style: { width: 120 } }, 'Symbol'),
+          THEAD.map((h) => React.createElement('th', { key: h.k, className: h.cls, style: { textAlign: h.k === 'shift' ? 'center' : 'left' } }, h.label)),
+        ),
+      ),
+      React.createElement('tbody', null,
+        classOrder.map((cls) => {
+          const syms = groups[cls].sort((a, b) => a.symbol.localeCompare(b.symbol))
+          if (!syms.length) return null
+          return [
+            // Group header — separate full-width row so the first symbol's
+            // symbol cell is NOT replaced by the group label.
+            React.createElement('tr', { key: cls + '-header', className: 'tla-group-header-row' },
+              React.createElement('td', { colSpan: 17, className: 'tla-group-header' },
+                React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                  CLASS_LABEL_TALARIA[cls] || cls,
+                  React.createElement('span', { className: 'tla-badge' }, syms.length + ' syms'))
+              )
+            ),
+            ...syms.map((r, idx) => {
+              const sig = String(r.signal || '').toLowerCase()
+              const isBuy = sig === 'buy'
+              const isSell = sig === 'sell'
+              const kellyVal = Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0
+              return React.createElement('tr', { key: r.symbol + '|' + (r.sweep_timestamp || ''), className: 'tla-kelly-row' },
+                React.createElement('td', { className: 'tla-k' }, r.symbol),
+              React.createElement('td', { className: 'tla-regime-cell', style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? '#ff5c5c' : 'var(--ui-text-tertiary,#888)' } }, fmtRegime(r.regime)),
+              React.createElement('td', { className: 'tla-agg-cell' }, fmtAggression(r.aggression)),
+              React.createElement('td', { className: 'tla-pwin-cell', style: { color: fmtPwinColor(r.markov_p_up) } }, Number(r.markov_p_up) != null ? fmtKellyPct(r.markov_p_up) : '—'),
+              React.createElement('td', { className: 'tla-pwin-cell', style: { color: fmtPwinColor(r.markov_p_dn) } }, Number(r.markov_p_dn) != null ? fmtKellyPct(r.markov_p_dn) : '—'),
+              React.createElement('td', { className: 'tla-shift-cell' }, r.regime_shift ? '⚡' : '—'),
+              React.createElement('td', { className: 'tla-prev-cell' }, fmtRegimeShort(r.prev_regime)),
+              React.createElement('td', { className: cn('tla-sig-cell', isBuy ? 'tla-pos' : isSell ? 'tla-neg' : ''), style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? '#ff5c5c' : 'var(--ui-text-tertiary,#888)' } }, sig === 'neutral' || !sig ? '—' : sig.toUpperCase()),
+              React.createElement('td', { className: 'tla-kelly-cell', style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? '#ff5c5c' : 'var(--ui-text-tertiary,#888)' } }, kellyVal.toFixed(3)),
+              React.createElement('td', { className: 'tla-kelly-fCell' }, Number(r.kelly_f) != null ? Number(r.kelly_f).toFixed(3) : '—'),
+              React.createElement('td', { className: 'tla-pwin-cell', style: { color: fmtPwinColor(r.p_win) } }, Number(r.p_win) != null ? fmtKellyPct(r.p_win) : '—'),
+              React.createElement('td', { className: 'tla-ev-cell', style: { color: fmtEvColor(r.ev) } }, Number(r.ev) != null ? '$' + Number(r.ev).toFixed(2) : '—'),
+              React.createElement('td', { className: 'tla-price-cell' }, Number(r.entry_price) > 0 ? fmtBrickPrice(r.entry_price) : '—'),
+              React.createElement('td', { className: 'tla-price-cell', style: { color: '#ff5c5c' } }, Number(r.stop_loss) > 0 ? fmtBrickPrice(r.stop_loss) : '—'),
+              React.createElement('td', { className: 'tla-price-cell', style: { color: 'var(--ui-accent,#4c9aff)' } }, Number(r.take_profit) > 0 ? fmtBrickPrice(r.take_profit) : '—'),
+              React.createElement('td', { className: 'tla-conf-cell' }, Number(r.regime_conf) != null ? (r.regime_conf * 100).toFixed(0) + '%' : '—'),
+              React.createElement('td', { className: 'tla-conf-cell' }, (r.p_timesfm != null && r.p_timesfm !== '') ? fmtKellyPct(r.p_timesfm) : '—'),
+              React.createElement('td', { className: 'tla-sizemult-cell' }, Number(r.size_mult) != null ? '×' + Number(r.size_mult).toFixed(2) : '—'),
+            )
+          })
+        ]
+      }),
+    ),
+  ),
+    // Below-table context: TimesFM forecast | EV | P_win for the most-qualified symbol
+    ctxRow.symbol && React.createElement('div', { className: 'tla-grid', style: { marginTop: 12 } },
+      React.createElement(StatCard, {
+        title: 'TimesFM forecast — ' + ctxRow.symbol,
+        value: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? '📈 ' : '📉 ') + fmtKellyPct(ctxRow.p_timesfm) : '⏳ unavailable',
+        sub: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '')
+          ? ctxRow.p_timesfm > 0.5 ? 'bullish skew > 50%' : 'bearish skew < 50%'
+          : 'no TimesFM model run yet',
+        tone: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? 'pos' : 'neg') : undefined,
+      }),
+      React.createElement(StatCard, {
+        title: 'EV — ' + ctxRow.symbol,
+        value: (ctxRow.ev != null && ctxRow.ev !== '') ? '$' + Number(ctxRow.ev).toFixed(2) : '—',
+        sub: 'expected value per $ of risk',
+        tone: (ctxRow.ev != null && ctxRow.ev !== '') ? (Number(ctxRow.ev) > 0 ? 'pos' : Number(ctxRow.ev) < 0 ? 'neg' : undefined) : undefined,
+      }),
+      React.createElement(StatCard, {
+        title: 'P_win — ' + ctxRow.symbol,
+        value: (ctxRow.p_win != null && ctxRow.p_win !== '') ? fmtKellyPct(ctxRow.p_win) : '—',
+        sub: 'predicted probability of winning',
+        tone: (ctxRow.p_win != null && ctxRow.p_win !== '') ? (Number(ctxRow.p_win) >= 0.6 ? 'pos' : Number(ctxRow.p_win) <= 0.4 ? 'neg' : 'warn') : undefined,
+      }),
+    ),
+  )
+}
+
 // Navigate to a plugin route in the Hermes desktop app.
 //
 // The SDK's `host.navigate('/talaria')` sets `window.location.hash` raw — a
@@ -661,6 +823,23 @@ const CSS = [
   '.tla-table th{color:var(--ui-text-tertiary,#888);font-weight:600;}',
   '.tla-table .tla-sm{font-size:9px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;white-space:nowrap;}',
   '.tla-table tbody tr:hover{background:rgba(255,255,255,0.02);}',
+  '.tla-kelly-table .tla-regime-cell{font-size:14px;font-weight:600;}',
+  '.tla-kelly-table .tla-agg-cell{font-size:13px;font-weight:600;}',
+  '.tla-kelly-table .tla-sig-cell{font-size:13px;font-weight:700;text-transform:uppercase;}',
+  '.tla-kelly-table .tla-kelly-cell{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-kelly-fCell{font-size:9px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-pwin-cell{font-size:11px;font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-ev-cell{font-size:11px;font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-price-cell{font-size:10px;font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-conf-cell{font-size:10px;color:var(--ui-text-tertiary,#888);font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-ts-cell{font-size:9px;color:var(--ui-text-tertiary,#888);font-variant-numeric:tabular-nums;}',
+  '.tla-kelly-table .tla-shift-cell{font-size:12px;text-align:center;}',
+  '.tla-kelly-table .tla-prev-cell{font-size:11px;color:var(--ui-text-secondary,#aaa);}',
+  '.tla-kelly-table .tla-sizemult-cell{font-size:9px;color:var(--ui-text-secondary,#aaa);}',
+  '.tla-kelly-table .tla-group-header td{font-size:11px;font-weight:600;color:var(--ui-text-tertiary,#888);border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  '.tla-kelly-table-wrap{overflow-x:auto;}',
+  '.tla-context-card .tla-context-value{font-size:20px;font-weight:700;}',
+  '.tla-context-card .tla-context-sub{font-size:10px;color:var(--ui-text-quaternary,#777);}',
   '.tla-badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase;}',
   '.tla-badge.open{background:rgba(120,220,120,0.15);color:#78dc78;}',
   '.tla-badge.closed{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}',
@@ -1585,7 +1764,7 @@ function TalariaDashboard({ config, claim }) {
   // `signal` (buy/sell/neutral) — the broadcast contract calls it `direction`,
   // so both are normalized client-side.
   const sweeps = useSupabaseData(config, 'nt_sweep_result',
-    { select: 'symbol,signal,effective_kelly,kelly_f,entry_price,stop_loss,take_profit,sweep_timestamp,regime,qualified', order: 'sweep_timestamp.desc', limit: '200' },
+    { select: 'symbol,sweep_timestamp,regime,regime_conf,markov_p_up,markov_p_dn,p_win,ev,p_timesfm,kelly_f,effective_kelly,brick_size,sl_bricks,tp_bricks,signal,entry_price,stop_loss,take_profit,qualified,aggression,regime_shift,prev_regime,size_mult', order: 'sweep_timestamp.desc', limit: '200' },
     connected)
 
   // Active symbols = plan symbols present in the latest sweep stream
@@ -1698,22 +1877,8 @@ function TalariaDashboard({ config, claim }) {
 
   // Kelly histogram — latest per symbol (fetch is sweep_timestamp desc, so
   // first occurrence per symbol is the newest).
-  const histData = []
-  {
-    const seen = {}
-    for (const r of (sweeps.data || [])) {
-      if (!seen[r.symbol]) {
-        seen[r.symbol] = true
-        histData.push({
-          label: r.symbol,
-          value: Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0,
-          badge: String(r.signal || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY',
-          color: String(r.signal || '').toLowerCase() === 'sell' ? 'var(--ui-danger, #ff5c5c)' : 'var(--ui-accent, #4c9aff)',
-          sub: String(r.regime || '').replace(/^high_vol_/, 'hv-').replace(/^low_vol_/, 'lv-').replace(/strong_/, 'str-'),
-        })
-      }
-    }
-  }
+  // Kelly table is now built inside TalariaKellyTable component (which dedups
+  // sweeps directly). The old histData for the HBar histogram is no longer used.
 
   // Renko chart window: fetch is brick_index desc limit 10 → reverse for the
   // ascending order the chart expects.
@@ -1798,14 +1963,6 @@ function TalariaDashboard({ config, claim }) {
       }),
     ),
     React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Kelly by symbol (latest sweep)'),
-      React.createElement('div', { className: 'tla-explainer' },
-        'Effective Kelly fraction per symbol from the latest sweep — how much of the book the engine would risk on that symbol (0.04 = 4%). Blue = buy signal, red = sell.'),
-      React.createElement(HBar, { data: histData, format: (v) => v.toFixed(3) }),
-      React.createElement('div', { className: 'tla-hint' },
-        `${histData.length} symbols · bar = kelly (blue buy / red sell) · as of ${histData.length ? String(sweeps.data[0].sweep_timestamp).slice(0, 19).replace('T', ' ') : '—'} UTC`),
-    ),
-    React.createElement('div', { className: 'tla-card' },
       React.createElement('h3', null, 'Renko bricks — last 10 (per symbol)'),
       React.createElement('div', { className: 'tla-explainer' },
         'The last 10 renko bricks of the selected symbol (each brick = one fixed price move of brick_size). ENTRY / SL / TP reference lines come from that symbol\'s latest sweep. Switch symbols to re-analyze.'),
@@ -1846,6 +2003,17 @@ function TalariaDashboard({ config, claim }) {
       React.createElement('div', { className: 'tla-hint' },
         `Analyzes the symbol selected in the chart above (${activeBrickSym || 'none'}). Nuance: Brick pattern = the last 10 bricks only (short-term shape: 3-push / pullback / chop). Markov P(up in 3) = a 3-state UP/DOWN/FLAT Markov chain fitted on up to 200 brick closes (longer statistical fit) — the probability the next 3-brick move is UP. A 50% value means no edge; >50% leans bullish, <50% leans bearish.`),
     ),
+
+    // Kelly by symbol — latest sweep (TABLE format, 2026-08-12 redesign).
+    // Moved below Markov + pattern. Groups by asset_class, sorts by symbol.
+    // Excludes brick_* columns. Below-table context: TimesFM / EV / P_win.
+    React.createElement('div', { className: 'tla-card' },
+      React.createElement('h3', null, 'Kelly by symbol — latest sweep'),
+      React.createElement('div', { className: 'tla-explainer' },
+        'Latest nt_sweep_result per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. Below-table context cards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest sweep did NOT qualify (qualified=false) — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
+      React.createElement(TalariaKellyTable, { sweeps, symbols }),
+    ),
+
     isPro ? React.createElement(PaperSection, {
       positions: paperPositions,
       equity: paperEquity,
