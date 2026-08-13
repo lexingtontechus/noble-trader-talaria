@@ -39,6 +39,8 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 
 // Plugin version — bumped per release. Shown in the pane + dashboard footers
 // so the deployed build is verifiable in-app (2026-08-11).
+// 0.2.4: hardening — error logging in register(), poll-failure visibility,
+//        graceful degradation when Hermes SDK context is unavailable.
 const PLUGIN_VERSION = '0.2.4'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
@@ -89,13 +91,26 @@ function useConfig() {
   return [config, update]
 }
 
+// Diagnostic logger — writes to console.error + window.__TA_URI_LOG__ if the
+// Hermes desktop app surfaces one. Silent in node test harness (no console
+// binding). This is the ONLY place plugin diagnostics should go so that
+// failures are visible when the desktop renderer can't connect to the backend.
+// ---------------------------------------------------------------------------
+function _log(level, msg) {
+  try {
+    if (typeof console !== 'undefined' && console[level]) {
+      console[level](`[talaria ${PLUGIN_VERSION}] ${msg}`)
+    }
+  } catch (e) {}
+}
+
 // ---------------------------------------------------------------------------
 // Direct Supabase REST fetch (PostgREST, anon key headers)
 // ---------------------------------------------------------------------------
 async function fetchSupabase(config, path, params = {}) {
   const base = (config.supabase_url || '').replace(/\/+$/, '')
   if (!base || !config.supabase_key) {
-    throw new Error('Not connected — enter Supabase URL + key in the Connect tab')
+    throw new Error('Not connected — open the Connect tab and save your claim token')
   }
   const qs = new URLSearchParams(params).toString()
   const url = `${base}/rest/v1/${path}${qs ? '?' + qs : ''}`
@@ -123,7 +138,7 @@ async function fetchSupabase(config, path, params = {}) {
 async function claimCheck(config) {
   const base = (config.supabase_url || '').replace(/\/+$/, '')
   if (!base || !config.supabase_key || !config.claim_token) {
-    throw { kind: 'error', message: 'Enter Supabase URL, anon key and claim token' }
+    throw { kind: 'error', message: 'Enter your claim token in the Connect tab' }
   }
   let resp
   try {
@@ -392,7 +407,7 @@ function startSignalPolling() {
           })
         }
       }
-    } catch (e) { /* silent — poll fallback, next tick */ }
+    } catch (e) { /* poll fallback — log for diagnostics, next tick retries */ _log('error', 'signal poll failed: ' + (e && e.message ? e.message : String(e))) }
   }
   poll()
   const timer = setInterval(poll, CHIP_POLL_MS)

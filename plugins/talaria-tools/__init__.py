@@ -1,14 +1,14 @@
-"""
-Talaria tools — Python plugin (in-chat analytics tools)
+"""Talaria tools — Python plugin (in-chat analytics tools)
 
-Registers talaria_* tools that read the Talaria Supabase analytics views via
-the Supabase REST API (public anon key + claim token), mirroring the
+Registers talaria_* tools that read the Talaria analytics views via the
+public REST API (anon key + claim token), mirroring the
 noble-trader plugin conventions. The Talaria desktop plugin (Electron) stores
 its config in localStorage, which a Python plugin cannot read — so this plugin
-sources config from environment variables:
+uses the same embedded service defaults as the desktop widget (Option A) and
+optionally allows env overrides:
 
-    TALARIA_SUPABASE_URL  — Supabase project REST URL
-    TALARIA_SUPABASE_KEY  — public anon key
+    TALARIA_SUPABASE_URL  — Talaria REST URL (optional override)
+    TALARIA_SUPABASE_KEY  — public anon key (optional override)
     TALARIA_CLAIM_TOKEN   — Talaria claim token
 
 Stdlib-only (urllib.request); no external dependencies.
@@ -28,38 +28,38 @@ log = logging.getLogger(__name__)
 _TIMEOUT = 10.0
 _ENV_VARS = ("TALARIA_SUPABASE_URL", "TALARIA_SUPABASE_KEY", "TALARIA_CLAIM_TOKEN")
 
+# Embedded service defaults (Option A, same public values as the desktop
+# widget plugins/talaria/plugin.js DEFAULT_SUPABASE_URL / DEFAULT_ANON_KEY).
+# The anon key is PUBLIC by design — RLS keeps the views read-only. Env vars
+# override these when set (operator / test environments); otherwise the tools
+# work with zero configuration.
+DEFAULT_SUPABASE_URL = "https://pcvscowltlrxzgxjurcr.supabase.co"
+DEFAULT_ANON_KEY = "sb_publishable_cYfseJa9z0qss0g_Y594wA_lXrWVBsa"
+
 
 # ---------------------------------------------------------------------------
 # Config resolution
 # ---------------------------------------------------------------------------
-def _get_config() -> Optional[dict[str, str]]:
-    """Resolve Talaria config from env vars.
+def _get_config() -> dict[str, str]:
+    """Resolve Talaria config.
 
-    Requires TALARIA_SUPABASE_URL + TALARIA_SUPABASE_KEY; TALARIA_CLAIM_TOKEN
+    Uses the embedded service defaults (Option A); TALARIA_SUPABASE_URL and
+    TALARIA_SUPABASE_KEY env vars override them when set. TALARIA_CLAIM_TOKEN
     is OPTIONAL (the v_talaria_* / v_eod_* views are anon-granted — the claim
     token is only needed for talaria-check claim validation, which these
     tools do not call). Returns a dict with keys ``supabase_url``,
-    ``supabase_key``, ``claim_token`` (may be ""), or ``None`` (after logging
-    ``talaria_tools_not_configured``) when a required var is missing. Never
-    logs the key or claim token values — only their presence.
+    ``supabase_key``, ``claim_token`` (may be ""). Never logs the key or
+    claim token values.
     """
-    required = ("TALARIA_SUPABASE_URL", "TALARIA_SUPABASE_KEY")
-    missing = [v for v in required if not os.environ.get(v)]
-    if missing:
-        log.warning(
-            "talaria_tools_not_configured missing=%s",
-            ",".join(missing),
-        )
-        return None
     return {
-        "supabase_url": os.environ["TALARIA_SUPABASE_URL"].rstrip("/"),
-        "supabase_key": os.environ["TALARIA_SUPABASE_KEY"],
+        "supabase_url": os.environ.get("TALARIA_SUPABASE_URL", DEFAULT_SUPABASE_URL).rstrip("/"),
+        "supabase_key": os.environ.get("TALARIA_SUPABASE_KEY", DEFAULT_ANON_KEY),
         "claim_token": os.environ.get("TALARIA_CLAIM_TOKEN", ""),
     }
 
 
 def _rest_url(base_url: str, view: str, params: Optional[dict[str, str]] = None) -> str:
-    """Build a Supabase PostgREST URL for ``view`` under ``/rest/v1``.
+    """Build a Talaria REST URL for ``view`` under ``/rest/v1``.
 
     Tolerates a base URL that already ends in ``/rest/v1`` so callers can set
     TALARIA_SUPABASE_URL to either the project root or the REST root.
@@ -94,7 +94,7 @@ def _http_error(tool: str, exc: Exception) -> dict[str, Any]:
             pass
         if exc.code == 404 or "does not exist" in detail:
             log.warning("%s_view_not_deployed code=%s", tool, exc.code)
-            return {"error": "view not deployed (migration 110) — run Supabase migration 110 and retry"}
+            return {"error": "view not deployed (migration 110) — run migration 110 and retry"}
         log.error("%s_http_error code=%s detail=%s", tool, exc.code, detail[:300])
         return {"error": f"talaria request failed (HTTP {exc.code})"}
     if isinstance(exc, TimeoutError):
@@ -151,14 +151,10 @@ def _markdown_table(headers: list[str], rows: list[dict[str, Any]]) -> str:
 def _talaria_health() -> dict[str, Any]:
     """Talaria signal health: per-symbol win rate, bias, profit factor, PnL.
 
-    Reads ``v_talaria_signal_health`` (limit 20) via the Supabase REST API and
+    Reads ``v_talaria_signal_health`` (limit 20) via the Talaria REST API and
     returns a compact markdown table.
     """
     cfg = _get_config()
-    if cfg is None:
-        return {
-            "error": "talaria not configured — set TALARIA_SUPABASE_URL, TALARIA_SUPABASE_KEY, TALARIA_CLAIM_TOKEN env vars"
-        }
     headers = {"apikey": cfg["supabase_key"], "Authorization": f"Bearer {cfg['supabase_key']}"}
     url = _rest_url(
         cfg["supabase_url"],
@@ -193,10 +189,6 @@ def _talaria_stats() -> dict[str, Any]:
     Reads ``v_talaria_portfolio_stats`` (limit 1) and returns a one-line summary.
     """
     cfg = _get_config()
-    if cfg is None:
-        return {
-            "error": "talaria not configured — set TALARIA_SUPABASE_URL, TALARIA_SUPABASE_KEY, TALARIA_CLAIM_TOKEN env vars"
-        }
     headers = {"apikey": cfg["supabase_key"], "Authorization": f"Bearer {cfg['supabase_key']}"}
     url = _rest_url(cfg["supabase_url"], "v_talaria_portfolio_stats", {"select": "*", "limit": "1"})
     try:
@@ -230,10 +222,6 @@ def _talaria_calibration() -> dict[str, Any]:
     markdown table of day | symbol | predicted | realized | bias | status.
     """
     cfg = _get_config()
-    if cfg is None:
-        return {
-            "error": "talaria not configured — set TALARIA_SUPABASE_URL, TALARIA_SUPABASE_KEY, TALARIA_CLAIM_TOKEN env vars"
-        }
     headers = {"apikey": cfg["supabase_key"], "Authorization": f"Bearer {cfg['supabase_key']}"}
     url = _rest_url(
         cfg["supabase_url"],
@@ -277,7 +265,7 @@ def register_tools(ctx: Any) -> None:
         name="talaria_health",
         toolset="trading",
         schema={
-            "description": "Talaria signal health: per-symbol n, win rate, bias, profit factor, total PnL (reads Supabase view v_talaria_signal_health; env config).",
+            "description": "Talaria signal health: per-symbol n, win rate, bias, profit factor, total PnL (reads Talaria analytics view v_talaria_signal_health; env config).",
             "name": "talaria_health",
             "parameters": {"type": "object", "properties": {}},
         },
@@ -289,7 +277,7 @@ def register_tools(ctx: Any) -> None:
         name="talaria_stats",
         toolset="trading",
         schema={
-            "description": "Talaria portfolio stats: trades, win rate, sharpe, sortino, calmar, max_dd, profit factor, total PnL (reads Supabase view v_talaria_portfolio_stats; env config).",
+            "description": "Talaria portfolio stats: trades, win rate, sharpe, sortino, calmar, max_dd, profit factor, total PnL (reads Talaria analytics view v_talaria_portfolio_stats; env config).",
             "name": "talaria_stats",
             "parameters": {"type": "object", "properties": {}},
         },
@@ -301,7 +289,7 @@ def register_tools(ctx: Any) -> None:
         name="talaria_calibration",
         toolset="trading",
         schema={
-            "description": "Talaria EOD calibration bias: last 7 days of predicted vs realized bias and status (reads Supabase view v_eod_calibration_bias; env config).",
+            "description": "Talaria EOD calibration bias: last 7 days of predicted vs realized bias and status (reads Talaria analytics view v_eod_calibration_bias; env config).",
             "name": "talaria_calibration",
             "parameters": {"type": "object", "properties": {}},
         },
