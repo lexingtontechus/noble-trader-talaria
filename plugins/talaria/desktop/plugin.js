@@ -41,7 +41,10 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 // so the deployed build is verifiable in-app (2026-08-11).
 // 0.2.4: hardening — error logging in register(), poll-failure visibility,
 //        graceful degradation when Hermes SDK context is unavailable.
-const PLUGIN_VERSION = '0.2.4'
+// 0.2.5: widget multi-placement — container-query responsive layout so the
+//        signals pane adapts to ANY dock zone (default stays right of chat);
+//        placement root-cause docs + delivery-chain watchdog in repo scripts.
+const PLUGIN_VERSION = '0.2.5'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -906,8 +909,10 @@ const CSS = [
   '.tla-chip .tla-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-text-quaternary,#777);flex-shrink:0;}',
   '.tla-chip.tla-chip-hot{color:var(--ui-accent,#4c9aff);font-weight:700;}',
   '.tla-chip.tla-chip-hot .tla-chip-dot{background:var(--ui-accent,#4c9aff);}',
-  // Side-by-side signals pane (Mode 2 widget — dock right of the chat)
-  '.tla-pane-root{display:flex;flex-direction:column;height:100%;gap:8px;padding:10px;overflow:auto;font-size:12px;}',
+  // Side-by-side signals pane (Mode 2 widget — default dock RIGHT of the
+  // chat, 300px column; users may drag it to any zone — see the @container
+  // rules below for the multi-placement adaptation).
+  '.tla-pane-root{display:flex;flex-direction:column;height:100%;width:100%;min-width:0;box-sizing:border-box;gap:8px;padding:10px;overflow:auto;font-size:12px;container-type:inline-size;}',
   '.tla-pane-header{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ui-text-primary,#eee);padding-bottom:6px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
   '.tla-pane-badge{background:var(--ui-accent,#4c9aff);color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;}',
   '.tla-pane-open{margin-left:auto;background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-secondary,#aaa);border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;}',
@@ -937,6 +942,20 @@ const CSS = [
   '.tla-pane-row-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}',
   '.tla-pane-row-ts{font-size:10px;color:var(--ui-text-quaternary,#777);}',
   '.tla-pane-foot{font-size:9px;color:var(--ui-text-quaternary,#666);margin-top:auto;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  // Multi-placement adaptation (2026-08-13): the pane is registered with
+  // default dock right (300px column), but users can drag it anywhere — a
+  // bottom strip, a widened zone, another monitor. `container-type:
+  // inline-size` on .tla-pane-root makes these @container queries track the
+  // pane's ACTUAL width, so the widget always renders sensibly no matter
+  // where it lands:
+  //   <560px  → compact single column (default right dock)
+  //   >=560px → two-column row grid + card shares the row (bottom/wide docks)
+  '@container (min-width: 560px){',
+  '.tla-pane-root .tla-pane-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}',
+  '.tla-pane-root .tla-pane-last{flex-wrap:nowrap;}',
+  '.tla-pane-root .tla-pane-last .tla-pane-ts{width:auto;margin-left:auto;}',
+  '.tla-pane-root .tla-pane-price{flex-wrap:nowrap;gap:12px;}',
+  '}',
 ].join('')
 
 function ensureStyle() {

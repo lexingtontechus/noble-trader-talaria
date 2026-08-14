@@ -27,6 +27,24 @@ action behind each signal:
 
 ---
 
+## What's in this release (v0.2.5)
+
+**Widget multi-placement + placement root-cause + delivery-chain watchdog.**
+
+| Change | Detail |
+|---|---|
+| **Widget multi-placement** | The signals pane docks **right of the chat by default** but now adapts to ANY zone you drag it to. `.tla-pane-root` uses CSS container queries (`container-type: inline-size` + `@container (min-width: 560px)`), so in bottom strips / widened docks the row list becomes a two-column grid and the card/price flatten to one row. |
+| **Placement root-cause** | If the pane ever appears in the LEFT sidebar instead of right of the chat, that's the Hermes app's persisted layout tree holding a stale adoption — run **⌘K → Reset layout** once to restore the right dock. Full detail in the repo CHANGELOG + talaria skill. |
+| **Delivery-chain watchdog** | New `scripts/talaria_delivery_health.py` monitors the full signals → toast → widget path every 30m (cron `talaria-delivery-health`): signal freshness, qualified flow in the widget TTL window, deploy byte-identity across all Electron homes, plugin load errors, widget-store recency. Silent when healthy; alerts to Discord on drift. |
+| **Deploy fix** | All 3 Electron homes + repo root re-synced to the current build (the v0.2.4 zip on disk was stale — pre-fix plugin.js). |
+
+**Deploy:** `talaria-plugin-v0.2.5.zip` release archive available.
+
+
+---
+
+---
+
 ## What's in this release (v0.2.4)
 
 **Kelly table redesign + group header fix + null context + admin plugin.**
@@ -110,8 +128,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.4.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.4.zip
+# Download talaria-plugin-v0.2.5.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.5.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
@@ -208,12 +226,13 @@ yours.
 **1. Keep signals beside your chat (widget pane)**
 
 After connecting, enable the **Talaria signals** pane (Settings → Plugins →
-Talaria). A live widget docks to the right of your chat session showing the
-latest signal with its ENTRY / SL / TP levels, a live qualified-signal count
-(every row shows ENTRY / SL / TP), and a rolling list of recent signals
-(last 60 minutes). Click a signal → full dashboard.
-You can drag or resize the pane; it stays live while you work anywhere in
-Hermes.
+Talaria). A live widget docks to the right of your chat session by default
+showing the latest signal with its ENTRY / SL / TP levels, a live
+qualified-signal count (every row shows ENTRY / SL / TP), and a rolling list
+of recent signals (last 60 minutes). Click a signal → full dashboard.
+You can drag the pane to any zone (right, bottom, another monitor) and
+resize it — the layout adapts automatically (compact column when narrow,
+two-column grid when wide) and stays live while you work anywhere in Hermes.
 
 **2. Let your agent answer signal questions (skills + tools)**
 
@@ -229,12 +248,17 @@ Your agent answers from live data — no manual lookups.
 
 **3. Get notified without watching the screen**
 
-Two optional cron jobs ship with Talaria (see `scripts/`):
+Three optional cron jobs ship with Talaria (see `scripts/`):
 
 - **Signal notifier** — every 5 min, prints *new* qualified signals to your
   connected chat (Discord/Telegram/desktop).
 - **Daily digest** — one markdown summary per day at 15:00 of signals,
   health, and calibration.
+- **Delivery-health watchdog** — every 30 min, silently verifies the whole
+  signals → toast → widget chain (signal freshness, qualified flow in the
+  widget's 60-min window, deployed-plugin byte-identity, plugin load errors,
+  widget-store recency). Alerts to your connected chat ONLY when something
+  drifts — a quiet system stays quiet.
 
 Enable them in Hermes (cron UI or `hermes cron`) and connect a messaging
 channel with `hermes setup` → *gateway* if you want them outside the desktop

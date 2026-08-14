@@ -362,7 +362,18 @@ assert(!!pane, 'registerMany exposes signals-pane item (side-by-side widget)')
 assert(pane.area === 'panes', 'signals-pane area panes')
 assert(pane.data && pane.data.placement === 'right', 'signals-pane placement right (beside chat)')
 assert(pane.data && pane.data.dock && pane.data.dock.pane === 'workspace' && pane.data.dock.pos === 'right', 'signals-pane docks right of workspace (chat)')
+assert(pane.data && pane.data.width === '300px', 'signals-pane default dock width 300px')
 assert(typeof pane.render === 'function', 'signals-pane render is a function')
+// Multi-placement adaptation (2026-08-13): the pane must adapt to ANY zone
+// the user drags it to (right default, but also bottom strips / widened
+// docks). The responsive contract is CSS-only via container queries —
+// assert the rules exist in the shipped source so a regression that drops
+// them fails the harness.
+const paneSrc = fs.readFileSync(PLUGIN_SRC, 'utf8')
+assert(paneSrc.includes('container-type:inline-size'), 'pane root declares container-type (container query host)')
+assert(paneSrc.includes('@container (min-width: 560px)'), 'pane ships @container breakpoint for wide docks (multi-placement)')
+assert(paneSrc.includes('.tla-pane-root .tla-pane-list{display:grid'), 'wide-dock rule switches row list to grid')
+
 // Render the pane standalone — must not throw.
 stub.reset()
 stub.setRenderFn(() => pane.render())
@@ -519,7 +530,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.4')), 'pane footer shows plugin version v0.2.4')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.5')), 'pane footer shows plugin version v0.2.5')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice
