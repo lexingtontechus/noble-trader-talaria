@@ -448,6 +448,27 @@ const notifyCalls = harnessHost._notifyCalls || []
 assert(notifyCalls.length >= 1, 'addSignal triggered at least one host.notify')
 const sigToasts = notifyCalls.filter((c) => c.id === 'talaria-signal-toast')
 assert(sigToasts.length >= 1, 'notify uses stable talaria-signal-toast id (never stacks)')
+
+// FIX 2026-08-14: only the newest unseen signal should toast per poll tick.
+// Simulate the 60s poll's desc-ordered batch: newest toasts, older gets
+// suppressToast=true → does NOT call host.notify.
+// Set watermark to BEFORE both signals so both are "new" (avoids the baseline
+// early-return path at line 742 which skips toasting).
+const preToastCount = sigToasts.length
+const tOld = new Date(Date.now() - 20 * 60 * 1000).toISOString()
+store.watermark = Date.parse(tOld)
+store.newestTs = Date.parse(tOld)
+store._toastCount = 0
+// Feed newest (toasts) then older (suppressed) — desc order like the real poll
+store.addSignal({ symbol: 'NZDUSD', direction: 'buy', kelly: 0.12, regime: 'low_vol_bull', ts: new Date(Date.now() - 2 * 60 * 1000).toISOString() })
+const afterNewest = (harnessHost._notifyCalls || []).filter((c) => c.id === 'talaria-signal-toast').length
+store.addSignal({ symbol: 'CADCHF', direction: 'sell', kelly: 0.05, regime: 'high_vol_bear', ts: new Date(Date.now() - 10 * 60 * 1000).toISOString() }, { suppressToast: true })
+const afterSuppressed = (harnessHost._notifyCalls || []).filter((c) => c.id === 'talaria-signal-toast').length
+assert(afterSuppressed === afterNewest, 'suppressToast:true skips host.notify (older batch row does not replace newest toast)')
+assert(afterNewest === preToastCount + 1, 'only ONE toast fires for the newest unseen signal in the batch')
+const allToasts = (harnessHost._notifyCalls || []).filter((c) => c.id === 'talaria-signal-toast')
+const finalToast = allToasts[allToasts.length - 1]
+assert(finalToast && finalToast.message && finalToast.message.includes('NZDUSD'), 'toast shows NEWEST signal (NZDUSD), not oldest-in-batch (CADCHF)')
 const lastToast = sigToasts[sigToasts.length - 1]
 assert(lastToast && lastToast.durationMs === 0, 'toast durationMs 0 (stays until dismissed)')
 assert(lastToast && typeof lastToast.meta === 'string' && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(lastToast.meta), 'toast meta footer has datetime (local YYYY-MM-DD HH:MM)')
@@ -530,7 +551,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.5')), 'pane footer shows plugin version v0.2.5')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.6')), 'pane footer shows plugin version v0.2.6')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice

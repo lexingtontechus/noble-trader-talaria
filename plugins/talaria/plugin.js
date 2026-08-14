@@ -44,7 +44,10 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 // 0.2.5: widget multi-placement — container-query responsive layout so the
 //        signals pane adapts to ANY dock zone (default stays right of chat);
 //        placement root-cause docs + delivery-chain watchdog in repo scripts.
-const PLUGIN_VERSION = '0.2.5'
+// 0.2.6: toast freshness fix — only the newest unseen signal toasts per poll
+//        tick (suppressToast flag in addSignal); poll interval 60s→10s so the
+//        widget pane lags the live DB by ≤10s instead of ≤60s (6s sweep cadence).
+const PLUGIN_VERSION = '0.2.6'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -354,7 +357,9 @@ function useRealtime(config, enabled, planSlug, handlers) {
 // reloads.
 // ---------------------------------------------------------------------------
 const UNREAD_FILE = 'talaria-unread.json'
-const CHIP_POLL_MS = 60 * 1000
+const CHIP_POLL_MS = 10 * 1000 // FIX (2026-08-14): 60s→10s. Signals qualify every
+  // ~6s (sweep cadence) but the widget only re-fetched every 60s, lagging the
+  // live DB. 10s captures nearly all new qualified signals within one tick.
 const UNREAD_MAX = 99
 
 // Single persistent toast id — re-notifying with the same id REPLACES the
@@ -396,6 +401,13 @@ function startSignalPolling() {
         qualified: 'eq.true',
         order: 'sweep_timestamp.desc', limit: '20',
       })
+      // FIX (2026-08-14): rows are sweep_timestamp.desc (newest first). Previously
+      // addSignal() toasted for EVERY ts > watermark row via the stable
+      // SIGNAL_TOAST_ID — replacing rather than stacking — so the LAST (oldest)
+      // row survived as the toast content + _toastCount was inflated by the full
+      // batch. Only the newest unseen signal should drive the toast. Feed all
+      // rows into recent[] (widget needs them) but suppress toast on older rows.
+      let toasted = false
       for (const r of (rows || [])) {
         if (r.qualified && String(r.signal || '').toLowerCase() !== 'neutral' && r.sweep_timestamp) {
           signalStore.addSignal({
@@ -407,7 +419,8 @@ function startSignalPolling() {
             stop: r.stop_loss,
             take: r.take_profit,
             ts: r.sweep_timestamp,
-          })
+          }, { suppressToast: toasted })
+          toasted = true
         }
       }
     } catch (e) { /* poll fallback — log for diagnostics, next tick retries */ _log('error', 'signal poll failed: ' + (e && e.message ? e.message : String(e))) }
@@ -710,7 +723,12 @@ const signalStore = {
     return () => this.listeners.delete(fn)
   },
   // Feed a qualified signal from any source (poll, dashboard realtime).
-  addSignal(sig) {
+  // opts.suppressToast: when true, still updates recent[]/lastSignal/unread but
+  // skips the host.notify toast (used by the 60s poll to toast ONLY the newest
+  // signal in a desc-ordered batch — 2026-08-14 fix for toast showing stale
+  // oldest-in-batch content).
+  addSignal(sig, opts) {
+    const suppressToast = !!(opts && opts.suppressToast)
     if (!this.loaded) this._load()
     const ts = Date.parse(sig && sig.ts) || 0
     if (!ts) return
@@ -771,7 +789,11 @@ const signalStore = {
         // until manually dismissed (durationMs 0 — the toast X is always
         // rendered), with a footer showing signal datetime + age + friendly
         // regime label.
-        if (host && typeof host.notify === 'function') {
+        // FIX (2026-08-14): skip the host.notify when suppressToast is set —
+        // the 60s poll feeds 20 desc-ordered rows but only the newest should
+        // produce a toast (older rows would replace it with stale content).
+        // unread/lastSignal/store updates still happen for the widget.
+        if (!suppressToast && host && typeof host.notify === 'function') {
           const dir = String(sig.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
           this._toastCount = (this._toastCount || 0) + 1
           const extra = this._toastCount > 1 ? `+${this._toastCount - 1} more` : ''

@@ -57,7 +57,41 @@ card/price flatten to one row).
 
 See talaria skill `references/widget_placement_and_delivery_monitor.md`.
 
-## [v0.2.4] — 2026-08-13
+## [v0.2.6] — 2026-08-14
+
+### Summary
+
+Fixes toast showing the **oldest** signal in the poll batch (not the newest) and
+reduces widget pane lag from 60s to 10s. Harness passes with new
+`suppressToast` assertions.
+
+### Fixed
+
+- **Toast showed oldest signal in poll batch** (`plugin.js:399`): the 60s widget
+  poll fed all 20 `qualified=eq.true` rows (desc order) through `addSignal`,
+  each firing `host.notify` with the stable `SIGNAL_TOAST_ID`. Since the toast
+  replaces rather than stacks, the **last-processed (oldest) row** survived as
+  the toast content — not the newest. Fix: `addSignal` now accepts
+  `{ suppressToast }` (2nd arg); the poll loop sets `suppressToast=true` on all
+  rows after the first (newest), so only the newest unseen signal toasts per
+  tick. `unread`/`recent[]`/store updates still happen for all rows. The realtime
+  broadcast path (`onSignal`, line 1864) is unaffected (per-signal feed).
+- **Widget pane lagged live DB by up to 60s** (`plugin.js:357`): `CHIP_POLL_MS`
+  reduced from `60 * 1000` to `10 * 1000`. Signals qualify every ~6s (sweep
+  cadence); 10s captures nearly all new qualified signals within one tick.
+
+### Version Bumps
+
+- Talaria plugin: `0.2.5` → `0.2.6`
+
+### Tests
+
+- `test_talaria_render_harness.mjs`: new assertions — `suppressToast:true`
+  skips `host.notify`; only ONE toast fires per batch; toast message shows the
+  NEWEST signal (NZDUSD), not oldest-in-batch (CADCHF). All PASS.
+- Version footer assertion bumped `v0.2.5` → `v0.2.6`.
+
+## [v0.2.5] — 2026-08-13
 
 ### Summary
 

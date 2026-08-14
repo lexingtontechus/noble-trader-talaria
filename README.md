@@ -27,6 +27,17 @@ action behind each signal:
 
 ---
 
+## What's in this release (v0.2.6)
+
+**Toast freshness fix + widget polling speed.**
+
+| Change | Detail |
+|---|---|
+| **Toast shows newest signal** | The 60s widget poll previously toasted EVERY qualified signal in the 20-row batch (desc order); since the toast replaces via a stable ID, the oldest-in-batch survived as the toast content. Now only the newest unseen signal toasts per poll tick (`addSignal(sig, { suppressToast })` — older batch rows skip `host.notify` but still update the store/widget). |
+| **Widget polling faster** | `CHIP_POLL_MS` 60s → 10s — signals qualify every ~6s (sweep cadence); the pane now lags the live DB by ≤10s instead of ≤60s. |
+
+**Deploy:** `talaria-plugin-v0.2.6.zip` release archive available.
+
 ## What's in this release (v0.2.5)
 
 **Widget multi-placement + placement root-cause + delivery-chain watchdog.**
@@ -128,8 +139,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.5.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.5.zip
+# Download talaria-plugin-v0.2.6.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.6.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
