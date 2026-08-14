@@ -51,14 +51,11 @@ card/price flatten to one row).
 
 ### Known Issues (not yet fixed)
 
-- **Toast shows oldest signal in poll batch** (2026-08-14): the 60s widget poll
-  fetches 20 `qualified=eq.true` rows in `sweep_timestamp.desc` order and feeds
-  ALL through `addSignal`, which calls `host.notify` with the stable
-  `SIGNAL_TOAST_ID` for each `ts > watermark`. Since the toast replaces rather
-  than stacks, the last-processed (oldest in the batch) signal wins → the toast
-  can show a signal hours older than the newest. Fix scoped (break after first
-  unseen in the desc-ordered batch) — awaiting build-code approval. See talaria
-  skill `references/widget_placement_and_delivery_monitor.md`.
+- **Toast shows oldest signal in poll batch** (2026-08-14): the 60s widget poll fetches 20 `qualified=eq.true` rows in `sweep_timestamp.desc` order and feeds ALL through `addSignal`, which toasts (stable `SIGNAL_TOAST_ID`) for each `ts > watermark`. Since the toast replaces on each call, the **last-processed (oldest in the batch)** signal survives as the toast content — NOT the newest. `_toastCount` also accumulates across all 20 rows per tick, inflating `+N more`. Fix scoped (only newest unseen signal should toast per tick) — awaiting build-code approval.
+
+- **Widget pane lags live DB by up to 60s** (2026-08-14): `startSignalPolling` uses `CHIP_POLL_MS = 60s`; signals qualify every ~6s but the widget only re-fetches every 60s. The 30s `PANE_TICK_MS` timer refreshes ages/TTL expiry but does NOT re-fetch data. The widget pane could share the realtime broadcast socket instead of REST-polling. Fix scoped (reduce `CHIP_POLL_MS` or subscribe pane to broadcast `signal` events) — awaiting build-code approval.
+
+See talaria skill `references/widget_placement_and_delivery_monitor.md`.
 
 ## [v0.2.4] — 2026-08-13
 
