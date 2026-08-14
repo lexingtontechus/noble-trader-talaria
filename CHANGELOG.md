@@ -57,6 +57,40 @@ card/price flatten to one row).
 
 See talaria skill `references/widget_placement_and_delivery_monitor.md`.
 
+## [v0.2.7] — 2026-08-14
+
+### Summary
+
+Fixes the **toast/widget disconnect** at its root: the widget pane could never
+show the newest signal because the 20-row poll truncated the NEWEST rows out of
+`recent[]`. Verified against the persisted leveldb store (showed the 06:05 batch
+while the DB + toast had XAUUSD@06:11).
+
+### Fixed
+
+- **Poll truncation bug** (`plugin.js:404`): the poll fetched 20 rows
+  `sweep_timestamp.desc` (newest first) and fed them in that order. Each
+  `addSignal` does `recent = [row, ...recent].slice(0, RECENT_MAX=12)` (unshift
+  to front) — so after 20 newest-first unshifts, the newest rows sat at the
+  array TAIL and `.slice()` kept the OLDEST 12. The widget showed the oldest 12
+  of each batch and could never render the newest signal; the toast (first-fed
+  row, `suppressToast=false`) showed the newest. Now the loop filters +
+  REVERSES the batch and feeds **oldest→newest**, so the newest survives at
+  `recent[0]`; `suppressToast` flips to `!isNewest` so only the last-fed
+  (newest) row toasts.
+- `addSignal` always `_emit()`s after a `recent[]` update (kept from 0.2.6) —
+  re-seen rows (ts ≤ watermark) still notify the pane so it re-renders.
+
+### Version Bumps
+
+- Talaria plugin: `0.2.6` → `0.2.7`
+
+### Tests
+
+- 3 new harness assertions: `recent` caps at 12 after a 15-row batch; NEWEST
+  signal (SYM00) survives at `recent[0]`; oldest surviving row is SYM11 (12th
+  oldest), NOT SYM14 (would mean the old oldest-first truncation). All PASS.
+
 ## [v0.2.6] — 2026-08-14
 
 ### Summary

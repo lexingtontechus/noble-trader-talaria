@@ -27,6 +27,17 @@ action behind each signal:
 
 ---
 
+## What's in this release (v0.2.7)
+
+**Widget newest-signal fix (toast/widget disconnect root cause).**
+
+| Change | Detail |
+|---|---|
+| **Widget now shows the newest signal** | The 20-row poll previously fed rows newest-first, so `.slice(0, RECENT_MAX)` truncated the NEWEST rows out of the widget's store — it showed the oldest 12 of each batch while the toast showed the newest. The poll now feeds oldest→newest (reversed), so the newest signal survives at the top of the widget list. |
+| **Always re-render** | `addSignal` always notifies the pane after updating the store, so re-seen rows still refresh the widget between poll ticks. |
+
+**Deploy:** `talaria-plugin-v0.2.7.zip` release archive available.
+
 ## What's in this release (v0.2.6)
 
 **Toast freshness fix + widget polling speed.**
@@ -49,7 +60,7 @@ action behind each signal:
 | **Delivery-chain watchdog** | New `scripts/talaria_delivery_health.py` monitors the full signals → toast → widget path every 30m (cron `talaria-delivery-health`): signal freshness, qualified flow in the widget TTL window, deploy byte-identity across all Electron homes, plugin load errors, widget-store recency. Silent when healthy; alerts to Discord on drift. |
 | **Deploy fix** | All 3 Electron homes + repo root re-synced to the current build (the v0.2.4 zip on disk was stale — pre-fix plugin.js). |
 
-**Deploy:** `talaria-plugin-v0.2.5.zip` release archive available.
+**Deploy:** `talaria-plugin-v0.2.6.zip` release archive available.
 
 
 ---
@@ -139,8 +150,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.6.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.6.zip
+# Download talaria-plugin-v0.2.7.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.7.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
