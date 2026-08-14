@@ -813,9 +813,15 @@ const signalStore = {
           } catch (e) {}
         }
       }
-      this._persist()
-      this._emit()
     }
+    // FIX (2026-08-14): ALWAYS _emit() when recent[] was updated — previously
+    // _emit() only fired inside `if (ts > this.watermark)`, so re-seen rows
+    // (ts <= watermark, the common case for 19/20 poll rows) updated recent[]
+    // but never notified subscribers → the widget pane showed STALE data and
+    // never re-rendered between poll ticks. The 30s PANE_TICK_MS age-refresh
+    // only re-sorted existing recent[], it never pulled new rows into view.
+    this._persist()
+    this._emit()
   },
   // User opened the dashboard (or clicked the chip) — clear the badge.
   markSeen() {

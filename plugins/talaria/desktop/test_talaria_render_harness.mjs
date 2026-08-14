@@ -469,6 +469,25 @@ assert(afterNewest === preToastCount + 1, 'only ONE toast fires for the newest u
 const allToasts = (harnessHost._notifyCalls || []).filter((c) => c.id === 'talaria-signal-toast')
 const finalToast = allToasts[allToasts.length - 1]
 assert(finalToast && finalToast.message && finalToast.message.includes('NZDUSD'), 'toast shows NEWEST signal (NZDUSD), not oldest-in-batch (CADCHF)')
+
+// FIX 2026-08-14 #2: stale widget data — addSignal must _emit() on EVERY call
+// (even re-seen ts <= watermark rows), not only when ts > watermark. Previously
+// the 19/20 re-seen rows in each poll batch updated recent[] but never emitted,
+// so the widget pane never re-rendered between poll ticks.
+let reemitCount = 0
+const unsub = store.subscribe(() => { reemitCount++ })
+const tNow = new Date().toISOString()
+store.watermark = Date.parse(tNow) + 60000 // watermark is 1min in the FUTURE
+store.newestTs = Date.parse(tNow) + 60000
+store.addSignal({ symbol: 'TRYJPY', direction: 'buy', kelly: 0.05, regime: 'low_vol_bull', entry: 0.1300, ts: tNow })
+assert(reemitCount >= 1, '_emit() fires even when ts <= watermark (re-seen row still notifies subscribers)')
+
+// Second re-seen addSignal must also emit (the 30s PANE_TICK won't pull new rows
+// without it)
+const before2 = reemitCount
+store.addSignal({ symbol: 'ZARJPY', direction: 'sell', kelly: 0.08, regime: 'high_vol_bear', ts: new Date(Date.now() - 5 * 60 * 1000).toISOString() })
+assert(reemitCount >= before2 + 1, 'second re-seen addSignal still _emit()s (widget re-renders on every poll)')
+unsub()
 const lastToast = sigToasts[sigToasts.length - 1]
 assert(lastToast && lastToast.durationMs === 0, 'toast durationMs 0 (stays until dismissed)')
 assert(lastToast && typeof lastToast.meta === 'string' && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(lastToast.meta), 'toast meta footer has datetime (local YYYY-MM-DD HH:MM)')
