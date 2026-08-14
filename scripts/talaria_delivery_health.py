@@ -7,7 +7,7 @@ notifications on the local Hermes desktop:
   1. SIGNALS ARRIVING   — nt_sweep_result rows landing (data pipeline live)
   2. QUALIFIED FLOW     — qualified=eq.true rows within SIGNAL_TTL_MS (60 min),
                           i.e. exactly the rows the widget/chip display
-  3. DEPLOY INTEGRITY   — desktop/plugin.js == root copy == all 3 Electron
+  3. DEPLOY INTEGRITY   — desktop/plugin.js == root copy == all 4 Electron
                           homes (a stale deployed plugin = widget shows the
                           old build after a reload — the 2026-08-13 drift)
   4. PLUGIN LOAD HEALTH — desktop.log scan for talaria load failures AFTER the
@@ -47,6 +47,7 @@ DEFAULT_LS = r"C:\Users\aloys\AppData\Roaming\Hermes\Local Storage\leveldb"
 HOMES = [
     r"C:\Users\aloys\AppData\Local\hermes\desktop-plugins\talaria\plugin.js",
     r"C:\Users\aloys\AppData\Local\hermes\profiles\ultron\desktop-plugins\talaria\plugin.js",
+    r"C:\Users\aloys\AppData\Local\hermes\profiles\noble-agent\desktop-plugins\talaria\plugin.js",
     r"C:\Users\aloys\.hermes\desktop-plugins\talaria\plugin.js",
 ]
 
@@ -173,7 +174,7 @@ def _parse_ts(ts) -> datetime:
 
 
 def check_deploy(repo_root: str, alerts: list, context: dict):
-    """3. Byte-identity: desktop == root == 3 homes."""
+    """3. Byte-identity: desktop == root == 4 homes."""
     desktop = os.path.join(repo_root, "plugins", "talaria", "desktop", "plugin.js")
     root = os.path.join(repo_root, "plugins", "talaria", "plugin.js")
     want = sha256(desktop)
