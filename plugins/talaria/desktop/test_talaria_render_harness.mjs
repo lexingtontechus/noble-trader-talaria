@@ -570,7 +570,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.6')), 'pane footer shows plugin version v0.2.6')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.7')), 'pane footer shows plugin version v0.2.7')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice
@@ -607,6 +607,30 @@ const audCount = orderAcc.texts.filter((t) => t === 'AUDUSD').length
 assert(audCount === 1, 'signal renders exactly once (card+list dedup) — no widget duplication')
 const liveText = orderAcc.texts.find((t) => /^\d+ live$/.test(t))
 assert(liveText === '4 live', 'badge counts all live signals (4) even though the card is not a list row')
+
+// FIX 2026-08-14 #3 regression: the 20-row poll feed must NOT truncate the
+// newest rows out of recent[]. Previously the desc loop unshifted each row
+// (newest first) and .slice(0, RECENT_MAX) kept the OLDEST 12 — so the widget
+// could never show the newest signal (toast had it, widget showed oldest).
+// Simulate a 15-row desc batch (newest tNew1 → oldest tOld15) fed the way the
+// poll now does (oldest→newest) and assert the NEWEST survives at recent[0].
+store.watermark = null
+store.newestTs = null
+store.recent = []
+store.lastSignal = null
+store._toastCount = 0
+const batchT = []
+for (let i = 0; i < 15; i++) {
+  batchT.push(new Date(Date.now() - (i + 1) * 60 * 1000).toISOString()) // t[0]=newest
+}
+// Poll feed order (oldest→newest, like the fixed loop): reverse the desc batch
+for (let i = batchT.length - 1; i >= 0; i--) {
+  const isNewest = i === 0
+  store.addSignal({ symbol: 'SYM' + String(i).padStart(2, '0'), direction: 'buy', kelly: 0.1, regime: 'low_vol_bull', ts: batchT[i] }, { suppressToast: !isNewest })
+}
+assert(store.recent.length === 12, 'recent caps at RECENT_MAX (12) after a 15-row batch')
+assert(store.recent[0] && store.recent[0].symbol === 'SYM00', 'NEWEST signal (SYM00) survives at recent[0] — not truncated out')
+assert(store.recent[11] && store.recent[11].symbol === 'SYM11', 'oldest surviving row is SYM11 (12th oldest), NOT SYM14 (would mean oldest-first truncation)')
 
 // Price enrichment (2026-08-10): a duplicate row (same symbol+ts) re-arriving
 // WITH prices must enrich the existing store entry + lastSignal, so signals

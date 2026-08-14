@@ -47,7 +47,13 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 // 0.2.6: toast freshness fix — only the newest unseen signal toasts per poll
 //        tick (suppressToast flag in addSignal); poll interval 60s→10s so the
 //        widget pane lags the live DB by ≤10s instead of ≤60s (6s sweep cadence).
-const PLUGIN_VERSION = '0.2.6'
+// 0.2.7: widget newest-signal fix — the 20-row poll fed rows newest-first, so
+//        .slice(0, RECENT_MAX) truncated the NEWEST rows out of recent[] and
+//        the widget showed the OLDEST 12 of each batch (toast had the newest,
+//        widget showed stale). Poll now feeds oldest→newest (reverse) so the
+//        newest survives at recent[0]; addSignal always _emit()s so the pane
+//        re-renders even on re-seen (ts <= watermark) rows.
+const PLUGIN_VERSION = '0.2.7'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -401,28 +407,28 @@ function startSignalPolling() {
         qualified: 'eq.true',
         order: 'sweep_timestamp.desc', limit: '20',
       })
-      // FIX (2026-08-14): rows are sweep_timestamp.desc (newest first). Previously
-      // addSignal() toasted for EVERY ts > watermark row via the stable
-      // SIGNAL_TOAST_ID — replacing rather than stacking — so the LAST (oldest)
-      // row survived as the toast content + _toastCount was inflated by the full
-      // batch. Only the newest unseen signal should drive the toast. Feed all
-      // rows into recent[] (widget needs them) but suppress toast on older rows.
-      let toasted = false
-      for (const r of (rows || [])) {
-        if (r.qualified && String(r.signal || '').toLowerCase() !== 'neutral' && r.sweep_timestamp) {
-          signalStore.addSignal({
-            symbol: r.symbol,
-            direction: r.signal,
-            kelly: Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0,
-            regime: r.regime,
-            entry: r.entry_price,
-            stop: r.stop_loss,
-            take: r.take_profit,
-            ts: r.sweep_timestamp,
-          }, { suppressToast: toasted })
-          toasted = true
-        }
-      }
+      // FIX (2026-08-14 #3): feed rows OLDEST→NEWEST (reverse of the desc fetch)
+      // so each addSignal's unshift keeps the NEWEST at position 0 — the
+      // .slice(0, RECENT_MAX) cap then retains the newest rows. Previously the
+      // desc loop unshifted newest-first, pushing the newest rows to the tail
+      // where the cap truncated them — the widget could never show the newest
+      // signal (only the oldest 12 of the batch survived).
+      const batch = (rows || []).filter(
+        (r) => r.qualified && String(r.signal || '').toLowerCase() !== 'neutral' && r.sweep_timestamp
+      ).reverse()
+      batch.forEach((r, i) => {
+        const isNewest = i === batch.length - 1
+        signalStore.addSignal({
+          symbol: r.symbol,
+          direction: r.signal,
+          kelly: Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0,
+          regime: r.regime,
+          entry: r.entry_price,
+          stop: r.stop_loss,
+          take: r.take_profit,
+          ts: r.sweep_timestamp,
+        }, { suppressToast: !isNewest })
+      })
     } catch (e) { /* poll fallback — log for diagnostics, next tick retries */ _log('error', 'signal poll failed: ' + (e && e.message ? e.message : String(e))) }
   }
   poll()
@@ -790,9 +796,10 @@ const signalStore = {
         // rendered), with a footer showing signal datetime + age + friendly
         // regime label.
         // FIX (2026-08-14): skip the host.notify when suppressToast is set —
-        // the 60s poll feeds 20 desc-ordered rows but only the newest should
-        // produce a toast (older rows would replace it with stale content).
-        // unread/lastSignal/store updates still happen for the widget.
+        // the poll feeds 20 desc-ordered rows reversed (oldest→newest) but only
+        // the newest (last-fed) should produce a toast (older rows would replace
+        // it with stale content). unread/lastSignal/store updates still happen
+        // for all rows.
         if (!suppressToast && host && typeof host.notify === 'function') {
           const dir = String(sig.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
           this._toastCount = (this._toastCount || 0) + 1
