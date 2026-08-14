@@ -49,6 +49,17 @@ card/price flatten to one row).
 
 - Talaria plugin: `0.2.4` → `0.2.5`
 
+### Known Issues (not yet fixed)
+
+- **Toast shows oldest signal in poll batch** (2026-08-14): the 60s widget poll
+  fetches 20 `qualified=eq.true` rows in `sweep_timestamp.desc` order and feeds
+  ALL through `addSignal`, which calls `host.notify` with the stable
+  `SIGNAL_TOAST_ID` for each `ts > watermark`. Since the toast replaces rather
+  than stacks, the last-processed (oldest in the batch) signal wins → the toast
+  can show a signal hours older than the newest. Fix scoped (break after first
+  unseen in the desc-ordered batch) — awaiting build-code approval. See talaria
+  skill `references/widget_placement_and_delivery_monitor.md`.
+
 ## [v0.2.4] — 2026-08-13
 
 ### Summary
