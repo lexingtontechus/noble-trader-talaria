@@ -53,7 +53,7 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 //        widget showed stale). Poll now feeds oldest→newest (reverse) so the
 //        newest survives at recent[0]; addSignal always _emit()s so the pane
 //        re-renders even on re-seen (ts <= watermark) rows.
-const PLUGIN_VERSION = '0.2.7'
+const PLUGIN_VERSION = '0.2.8'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -139,6 +139,32 @@ async function fetchSupabase(config, path, params = {}) {
     throw new Error(`${resp.status} ${resp.statusText}${body ? ' — ' + body.slice(0, 120) : ''}`)
   }
   return await resp.json()
+}
+// COUNT helper — PostgREST count via Prefer: count=exact header → X-Total-Count.
+// Used by the shared poll to populate signalStore.qualifiedCount60m (the single
+// count source of truth across toast, widget, chip, and dashboard surfaces).
+async function fetchSupabaseCount(config, path, params = {}) {
+  const base = (config.supabase_url || '').replace(/\/+$/, '')
+  if (!base || !config.supabase_key) {
+    throw new Error('Not connected — open the Connect tab and save your claim token')
+  }
+  const qs = new URLSearchParams(params).toString()
+  const url = `${base}/rest/v1/${path}${qs ? '?' + qs : ''}`
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'apikey': config.supabase_key,
+      'Authorization': `Bearer ${config.supabase_key}`,
+      'Accept': 'application/json',
+      'Prefer': 'count=exact',
+    },
+  })
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '')
+    throw new Error(`${resp.status} ${resp.statusText}${body ? ' — ' + body.slice(0, 120) : ''}`)
+  }
+  const n = parseInt(resp.headers.get('X-Total-Count') || '0', 10)
+  return Number.isNaN(n) ? 0 : n
 }
 
 // ---------------------------------------------------------------------------
@@ -402,11 +428,26 @@ function startSignalPolling() {
       // (q=false), which starved the widget of priced rows. Filter server-side
       // so we always get the newest QUALIFIED signals (same as the notify
       // watcher), which carry entry/stop/take. (2026-08-10 fix)
-      const rows = await fetchSupabase(cfg, 'nt_sweep_result', {
-        select: 'symbol,signal,effective_kelly,kelly_f,entry_price,stop_loss,take_profit,sweep_timestamp,qualified,regime',
-        qualified: 'eq.true',
-        order: 'sweep_timestamp.desc', limit: '20',
-      })
+      // Parallel: 20 newest rows (for display list + card) AND the COUNT of
+      // ALL qualified signals in the last 60m (single source of truth for the
+      // toast/footer count + widget/chip/dashboard badges — 2026-08-14
+      // harmonization fix). The 20-row batch is capped by Supabase LIMIT and
+      // cannot represent the true 60m count, so a separate COUNT query via
+      // Prefer: count=exact (X-Total-Count header) is the authoritative number.
+      const cutoff60m = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 19)
+      const [rows, count] = await Promise.all([
+        fetchSupabase(cfg, 'nt_sweep_result', {
+          select: 'symbol,signal,effective_kelly,kelly_f,entry_price,stop_loss,take_profit,sweep_timestamp,qualified,regime',
+          qualified: 'eq.true',
+          order: 'sweep_timestamp.desc', limit: '20',
+        }),
+        fetchSupabaseCount(cfg, 'nt_sweep_result', {
+          qualified: 'eq.true',
+          sweep_timestamp: `gte.${cutoff60m}`,
+          select: 'id',
+        }),
+      ])
+      signalStore.qualifiedCount60m = count || 0
       // FIX (2026-08-14 #3): feed rows OLDEST→NEWEST (reverse of the desc fetch)
       // so each addSignal's unshift keeps the NEWEST at position 0 — the
       // .slice(0, RECENT_MAX) cap then retains the newest rows. Previously the
@@ -436,7 +477,7 @@ function startSignalPolling() {
   return () => clearInterval(timer)
 }
 
-// Relative-age + UTC formatters for the toast footer ("how current").
+// RELATIVE-AGE + UTC formatters for the toast footer ("how current").
 function fmtAge(tsMs) {
   const diff = Math.max(0, Date.now() - tsMs)
   const min = Math.floor(diff / 60000)
@@ -696,6 +737,9 @@ const signalStore = {
   dashboardActive: false,
   listeners: new Set(),
   loaded: false,
+  qualifiedCount60m: undefined, // live: Supabase COUNT of qualified signals in last 60m —
+  // single source of truth for the toast footer count, widget badge, chip badge,
+  // and dashboard stat (2026-08-14 harmonization — all 4 surfaces now agree).
   _load() {
     try {
       const raw = localStorage.getItem(UNREAD_FILE)
@@ -765,6 +809,18 @@ const signalStore = {
       return
     }
     if (ts > this.newestTs) this.newestTs = ts
+    // CROSS-SURFACE CONSISTENCY (2026-08-14 user: toast+widget+dashboards
+    // must show the SAME latest signal). lastSignal is the single source of
+    // truth for "latest signal" across the toast (L811), widget card
+    // (L2326-2332, falls back to last when stale), and dashboards
+    // (feed signalStore via addSignal L1899). Always refresh it to the newest
+    // incoming signal so a stale lastSignal (e.g. persisted before the pricing
+    // feature, or signals that arrived during dashboardActive where only
+    // watermark advanced L787 without touching lastSignal) can't make the
+    // widget card lag the toast.
+    if (!this.lastSignal || ts > (Date.parse(this.lastSignal.ts) || 0)) {
+      this.lastSignal = { symbol: sig.symbol, direction: sig.direction, kelly: sig.kelly, regime: sig.regime, entry: sig.entry, stop: sig.stop, take: sig.take, ts: sig.ts }
+    }
     // Enrich lastSignal prices even on a duplicate (same symbol+ts re-arrives
     // with price data — e.g. store persisted before the pricing feature).
     if (hasPrices && this.lastSignal && this.lastSignal.symbol === sig.symbol && this.lastSignal.ts === sig.ts) {
@@ -802,19 +858,32 @@ const signalStore = {
         // for all rows.
         if (!suppressToast && host && typeof host.notify === 'function') {
           const dir = String(sig.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
-          this._toastCount = (this._toastCount || 0) + 1
-          const extra = this._toastCount > 1 ? `+${this._toastCount - 1} more` : ''
+          // HARMONIZATION (2026-08-14): use signalStore.qualifiedCount60m — the
+          // shared Supabase COUNT of all qualified signals in the last 60m — so
+          // the toast footer shows the SAME count as the widget badge, chip
+          // badge, and dashboard stat. Previously _toastCount was a cumulative
+          // toasts-fired counter (e.g. "+20 more") which did NOT match any of
+          // those surfaces. Regime label is placed FIRST in the footer (before
+          // datetime + age) per user preference.
           const regimeLabel = fmtRegime(sig.regime)
+          const liveCount = signalStore.qualifiedCount60m
+          const countLabel = liveCount > 0 ? ` · ${liveCount} live signals` : ''
           // ENTRY price in the toast message when available (2026-08-11 —
           // user flagged the toast showed "old format w/o pricing").
           const entryLabel = Number(sig.entry) > 0 ? ` · ENTRY ${fmtBrickPrice(sig.entry)}` : ''
+          const footerParts = [
+            regimeLabel,
+            fmtSignalTime(ts),
+            fmtAge(ts),
+          ].filter(Boolean)
+          const footer = footerParts.join(' · ') + countLabel
           try {
             host.notify({
               id: SIGNAL_TOAST_ID,
               kind: 'info',
               title: 'Talaria signal',
               message: `${sig.symbol} ${dir}${sig.kelly != null ? ' · kelly ' + Number(sig.kelly).toFixed(3) : ''}${entryLabel}`,
-              meta: regimeLabel ? `${fmtToastFooter(ts, extra)} · ${regimeLabel}` : fmtToastFooter(ts, extra),
+              meta: footer,
               durationMs: 0,
             })
           } catch (e) {}
@@ -1371,7 +1440,7 @@ function HotSignalsBanner({ signals }) {
     React.createElement('div', { className: 'tla-explainer' },
       'The most recent qualified signals, ranked by effective Kelly — the trades the engine is most interested in right now. A chip = one signal for that symbol (buy/sell).'),
     React.createElement('span', { className: 'tla-hot-ts' },
-      `as of ${new Date(newest).toISOString().slice(0, 19).replace('T', ' ')} UTC · ${hot.length} in 10m window`),
+      `as of ${new Date(newest).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${hot.length} in 10m window`),
     React.createElement('div', { className: 'tla-hot' },
       hot.map((h) => {
         const sell = String(h.direction || '').toLowerCase() === 'sell'
@@ -1909,6 +1978,10 @@ function TalariaDashboard({ config, claim }) {
     signalStore.markSeen()
     return () => { signalStore.dashboardActive = false }
   }, [])
+  // Re-render when the shared qualifiedCount60m changes (poll updates it every
+  // 10s) so the dashboard stat stays in lockstep with the widget/chip/toast.
+  const [, setCountTick] = React.useState(0)
+  React.useEffect(() => signalStore.subscribe(() => setCountTick((t) => t + 1)), [])
 
   // Hot-signal banner: live broadcasts + seed rows (qualified, non-neutral,
   // kelly present), deduped by symbol+ts, live first.
@@ -2012,12 +2085,12 @@ function TalariaDashboard({ config, claim }) {
       React.createElement(StatCard, {
         title: 'Plan',
         value: claim.plan_slug === 'precision_pro' ? 'Precision Pro' : 'Signal Scout',
-        sub: `status ${claim.sub_status} · claim re-check 24h`,
+        sub: `Subscription ${claim.sub_status === 'active' ? 'Active' : claim.sub_status === 'grace' ? 'Grace' : 'Inactive'} · Token Valid`,
       }),
       React.createElement(StatCard, {
         title: 'Symbols',
         value: String(symbolList.length || '—'),
-        sub: symbols.error ? `symbol list unavailable (${symbols.error.message})` : 'from nt_symbol plan_ids',
+        sub: symbols.error ? `symbol list unavailable (${symbols.error.message})` : (claim.plan_slug === 'precision_pro' ? 'Precision Pro' : 'Signal Scout'),
       }),
       React.createElement(StatCard, {
         title: 'Realtime',
@@ -2026,9 +2099,9 @@ function TalariaDashboard({ config, claim }) {
         tone: wsState === 'open' ? 'pos' : undefined,
       }),
       React.createElement(StatCard, {
-        title: 'Hot signals',
-        value: String(hotWindowCount || 0),
-        sub: 'qualified · 10m TTL · top 5',
+        title: 'Qualified signals',
+        value: String(signalStore.qualifiedCount60m || hotWindowCount || 0),
+        sub: 'qualified signals in the last 60m (shared count with widget + chip + toast)',
       }),
     ),
     React.createElement('div', { className: 'tla-card' },
@@ -2077,9 +2150,9 @@ function TalariaDashboard({ config, claim }) {
     // Moved below Markov + pattern. Groups by asset_class, sorts by symbol.
     // Excludes brick_* columns. Below-table context: TimesFM / EV / P_win.
     React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Kelly by symbol — latest sweep'),
+      React.createElement('h3', null, 'Kelly by symbol'),
       React.createElement('div', { className: 'tla-explainer' },
-        'Latest nt_sweep_result per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. Below-table context cards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest sweep did NOT qualify (qualified=false) — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
+        'Latest signal per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. Below-table context cards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest signal did NOT qualify — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
       React.createElement(TalariaKellyTable, { sweeps, symbols }),
     ),
 
@@ -2232,7 +2305,7 @@ function TalariaDashboard({ config, claim }) {
     isPro ? React.createElement('div', { className: 'tla-card' },
       React.createElement('h3', null, 'Paper vs equal-weight'),
       React.createElement('div', { className: 'tla-explainer' },
-        'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that day (realized PnL books on close, signal PnL books on signal date). Example: 08-06 showed −$448 because 362 signals resolved (+$448 theoretical) while the paper book had $0 realized that day — the closes were booked 08-08 instead. Read it as a trend, not an exact comparison.'),
+        'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that day (realized PnL books on close, signal PnL books on signal date). Read it as a trend, not an exact comparison.'),
       vsOpt.error
         ? React.createElement('div', { className: 'tla-hint' }, 'Comparison view not deployed yet — ' + vsOpt.error.message)
         : vsOptRows.length === 0
@@ -2262,7 +2335,7 @@ function TalariaDashboard({ config, claim }) {
     ) : null,
 
     React.createElement('div', { className: 'tla-hint' },
-      `Talaria v${PLUGIN_VERSION} · Copyright - Lexington Tech LLC`),
+      `Talaria v${PLUGIN_VERSION} · Copyright - Noble Trading App & Lexington Tech LLC`),
   )
 }
 
@@ -2316,19 +2389,18 @@ function TalariaSignalsPane() {
   // own signal is excluded from the list so a signal NEVER renders twice
   // (card + list) — that was the widget duplication seen in screenshots.
   const lastTs = last ? (Date.parse(last.ts) || 0) : 0
-  const lastFresh = last && lastTs > 0 && (now - lastTs) <= SIGNAL_TTL_MS
+  // lastSignal is now updated on every addSignal (L767-771) to the newest
+  // incoming signal — removed the stale-fallback branch that used a
+  // possibly-stale persisted lastSignal (before: lastFresh && ...card=last).
   const freshRows = (recent || [])
     .map((r) => ({ ...r, _ts: Date.parse(r.ts) || 0 }))
     .filter((r) => r._ts > 0 && (now - r._ts) <= SIGNAL_TTL_MS)
     .sort((a, b) => b._ts - a._ts)
   let card = null
   let cardTs = 0
-  if (freshRows.length && (!lastFresh || freshRows[0]._ts > lastTs)) {
+  if (freshRows.length && (freshRows[0]._ts > lastTs)) {
     card = freshRows[0]
     cardTs = card._ts
-  } else if (lastFresh) {
-    card = last
-    cardTs = lastTs
   }
   const cardKey = card && card.ts ? `${card.symbol}|${card.ts}` : null
   const rows = (cardKey ? freshRows.filter((r) => `${r.symbol}|${r.ts}` !== cardKey) : freshRows)
@@ -2338,7 +2410,7 @@ function TalariaSignalsPane() {
   // signals (TTL-fresh recent rows — same count as the chip), NOT the
   // accumulated unread counter (which was capped at 99 and never decayed —
   // "99 new" was meaningless).
-  const liveCount = freshRows.length
+  const liveCount = signalStore.qualifiedCount60m
 
   const lastPriceLine = card &&
     (Number(card.entry) > 0 || Number(card.stop) > 0 || Number(card.take) > 0)
@@ -2409,7 +2481,7 @@ function TalariaSignalsPane() {
         )
       : null,
     React.createElement('div', { className: 'tla-pane-foot' },
-      `Talaria v${PLUGIN_VERSION} · Lexington Tech LLC`),
+      `Talaria v${PLUGIN_VERSION} · Copyright - Noble Trading App & Lexington Tech LLC`),
   )
 }
 
@@ -2455,10 +2527,12 @@ function TalariaChip() {
   const lastFresh = last && lastTs && (now - lastTs) <= SIGNAL_TTL_MS
   const dir = last && String(last.direction || '').toLowerCase() === 'sell' ? 'SELL' : 'BUY'
   const ageLabel = lastFresh && lastTs ? fmtAge(lastTs) : ''
-  // LIVE COUNT (2026-08-11): same as the pane — the chip badge reflects LIVE
-  // qualified signals (TTL-fresh recent rows), NOT the accumulated unread
-  // counter (which capped at 99 and never decayed).
-  const liveCount = ((snap.recent || []).filter((r) => Date.parse(r.ts) && (now - Date.parse(r.ts)) <= SIGNAL_TTL_MS)).length
+  // LIVE COUNT (2026-08-14 harmonization): the chip badge uses the SAME
+  // signalStore.qualifiedCount60m (Supabase COUNT of all qualified signals in
+  // the last 60m) as the widget pane badge and toast footer — NOT the TTL-fresh
+  // recent[] subset (capped at RECENT_MAX=12) which could undercount or 0
+  // while the toast showed a different number. All 4 surfaces now agree.
+  const liveCount = signalStore.qualifiedCount60m || 0
   const regimeLabel = lastFresh && last && last.regime ? fmtRegime(last.regime) : ''
   const label = liveCount > 0
     ? `Talaria · ${liveCount}`

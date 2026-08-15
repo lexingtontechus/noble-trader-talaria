@@ -1,7 +1,7 @@
 name: talaria-tools
 version: "1.0.0"
 description: "Talaria in-chat analytics tools — signal health, portfolio stats, calibration (config via env)"
-author: "Lexington Tech"
+author: "Noble Trading App & Lexington Tech"
 requires_env: []
 provides_tools:
   - talaria_health

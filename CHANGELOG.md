@@ -3,6 +3,75 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.8] — 2026-08-14
+
+### Summary
+
+**Count harmonization across all 4 Talaria surfaces.** Previously the toast,
+widget pane badge, statusbar chip, and dashboard stat each computed the live
+signal count from different data pools with different logic — producing values
+like `+20 more`, `4 live`, and `5 in 10m window` that could never agree. Now all
+four read from a single source of truth: a Supabase `COUNT(qualified=eq.true,
+sweep_timestamp >= now-60m)` query, populated in the shared 10s poll and stored
+in `signalStore.qualifiedCount60m`.
+
+Additionally, the toast footer is reordered so the **regime label appears first**
+(`🐂 High-vol bull · 2026-08-14 … · 22m ago · N live signals`), and the toast
+count uses the shared 60m qualified count instead of the cumulative
+`_toastCount` "toasts-fired" counter.
+
+### Fixed
+
+- **Toast `+N more` → `<N> live signals`** (the `+N` was a cumulative
+  toasts-fired counter since last `markSeen()`, not a signal count). The toast
+  footer now reads the shared `signalStore.qualifiedCount60m` so the toast and
+  widget badge always agree.
+- **Toast footer reordered**: regime label first, then datetime, then age, then
+  live count — per user report on the screenshot (regime was after datetime).
+- **Chip badge** now uses `signalStore.qualifiedCount60m` (not the TTL-filtered
+  `snap.recent` subset capped at `RECENT_MAX=12`), matching the widget pane.
+- **Dashboard stat** renamed from "Hot signals (10m)" to "Qualified signals"
+  reading the shared `signalStore.qualifiedCount60m`, with the dashboard
+  subscribing to the store for live updates.
+- **Widget pane badge** was already referencing `signalStore.qualifiedCount60m`
+  (2026-08-11 WIP) but the field was never populated — now it is.
+- **Copyright footer updated** to "Copyright - Noble Trading App & Lexington
+  Tech LLC" across both dashboard and pane footers in both `plugin.js` copies.
+- **Stale example text removed** from the "Paper vs equal-weight" explainer —
+  the inline example referencing "08-06 showed −$448 because 362 signals..."
+  was outdated (post-purge actual: 08-06 Paper $0, Equal-wt $1,793.62,
+  Delta -$1,793.62). The timing-mismatch explanation is kept; the specific
+  stale numbers are removed.
+
+### Added
+
+- `fetchSupabaseCount` helper — PostgREST `Prefer: count=exact` →
+  `X-Total-Count` header, for the shared 60m COUNT query.
+- `signalStore.qualifiedCount60m` — single count source of truth across toast,
+  widget, chip, and dashboard.
+- Dashboard `useEffect` subscribing to `signalStore` so the stat refreshes
+  when the poll updates the count (every 10s).
+
+### Dashboard UX refinements
+
+- **Hot signals timestamp → local timezone**: the `HotSignalsBanner` timestamp
+  changed from UTC (`as of 2026-08-15 00:05 UTC`) to the user's local timezone
+  via `new Date(newest).toLocaleString(undefined, { … })`.
+- **Plan panel labels**: `status ${sub_status} · claim re-check 24h` →
+  `Subscription ${Active|Grace|Inactive} · Token Valid`.
+- **Symbols panel label**: `from nt_symbol plan_ids` → the plan name
+  (e.g. `Precision Pro`).
+- **Kelly table panel**: removed `sweep` / `nt_sweep_result` references from the
+  panel header ("Kelly by symbol" — no "latest sweep" suffix) and the
+  explainer text ("Latest signal per symbol").
+
+### Tests
+
+- Harness asserts: toast footer has `live signals` (not `+N more`), toast
+  `sigToasts` assertion uses the post-addSignal `allToasts` snapshot, chip badge
+  reads `qualifiedCount60m`, chip goes neutral when count is 0, mock `fetch`
+  returns `X-Total-Count` header. All 82 assertions PASS.
+
 ## [v0.2.5] — 2026-08-13
 
 ### Summary

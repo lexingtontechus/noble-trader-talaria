@@ -60,6 +60,9 @@ function jsonResp(obj, status = 200) {
     statusText: status === 200 ? 'OK' : 'ERR',
     json: async () => obj,
     text: async () => JSON.stringify(obj),
+    // X-Total-Count header supports fetchSupabaseCount's COUNT query (Prefer:
+    // count=exact). For arrays the count = length (mock approximation).
+    headers: { get: (name) => name.toLowerCase() === 'x-total-count' ? String(Array.isArray(obj) ? obj.length : 1) : null },
   }
 }
 
@@ -459,6 +462,7 @@ const tOld = new Date(Date.now() - 20 * 60 * 1000).toISOString()
 store.watermark = Date.parse(tOld)
 store.newestTs = Date.parse(tOld)
 store._toastCount = 0
+store.qualifiedCount60m = 2 // 2 qualified signals in the last 60m — shared count source of truth
 // Feed newest (toasts) then older (suppressed) — desc order like the real poll
 store.addSignal({ symbol: 'NZDUSD', direction: 'buy', kelly: 0.12, regime: 'low_vol_bull', ts: new Date(Date.now() - 2 * 60 * 1000).toISOString() })
 const afterNewest = (harnessHost._notifyCalls || []).filter((c) => c.id === 'talaria-signal-toast').length
@@ -488,11 +492,16 @@ const before2 = reemitCount
 store.addSignal({ symbol: 'ZARJPY', direction: 'sell', kelly: 0.08, regime: 'high_vol_bear', ts: new Date(Date.now() - 5 * 60 * 1000).toISOString() })
 assert(reemitCount >= before2 + 1, 'second re-seen addSignal still _emit()s (widget re-renders on every poll)')
 unsub()
-const lastToast = sigToasts[sigToasts.length - 1]
+const lastToast = allToasts[allToasts.length - 1] // NZDUSD toast (allToasts includes post-L449 fires)
 assert(lastToast && lastToast.durationMs === 0, 'toast durationMs 0 (stays until dismissed)')
 assert(lastToast && typeof lastToast.meta === 'string' && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(lastToast.meta), 'toast meta footer has datetime (local YYYY-MM-DD HH:MM)')
 assert(lastToast && /ago|just now/.test(lastToast.meta || ''), 'toast meta footer has relative age')
 assert(lastToast && /🐻|🐂|bull|bear/.test(lastToast.meta || ''), 'toast meta footer has friendly regime label')
+// HARMONIZATION (2026-08-14): toast footer shows the shared qualifiedCount60m
+// (NOT the old +N more toasts-fired counter), and regime appears BEFORE the
+// datetime so the footer reads: "regime · datetime · age · N live signals".
+assert(lastToast && !/\+N more/.test(lastToast.meta || '') && /\+\d+ more/.test(lastToast.meta || '') === false, 'toast footer shows live signal count, NOT +N more toasts counter')
+assert(lastToast && /live signals/.test(lastToast.meta || ''), 'toast footer shows "live signals" (shared qualifiedCount60m)')
 
 // TTL + pricing contract (2026-08-10): the pane only displays signals within
 // the 60-min window (store untouched), the last-signal card shows
@@ -543,6 +552,7 @@ store.watermark = null
 store.newestTs = null
 store.recent = []
 store.unread = 0
+store.qualifiedCount60m = 0 // neutral chip — no live count from the shared COUNT
 store.lastSignal = { symbol: 'USDJPY', direction: 'sell', kelly: 0.1, regime: 'high_vol_bear', entry: 155.3, stop: 155.8, take: 154.5, ts: tStale }
 stub.reset()
 stub.setRenderFn(() => chip.render())
@@ -555,6 +565,7 @@ assert(chipStaleAcc.texts.some((x) => x.trim() === 'Talaria'), 'chip goes neutra
 // the LIVE qualified count (Talaria · N), not the accumulated unread counter.
 store.recent = [{ symbol: 'GBPUSD', direction: 'buy', kelly: 0.2, regime: 'low_vol_strong_bull', entry: 1.2950, stop: 1.2900, take: 1.3050, ts: tFresh }]
 store.unread = 99 // stale unread must NOT drive the label anymore
+store.qualifiedCount60m = 1 // 1 TTL-fresh recent row → shared count source of truth
 stub.reset()
 stub.setRenderFn(() => chip.render())
 stub.renderOnce()
@@ -570,7 +581,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.7')), 'pane footer shows plugin version v0.2.7')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.8')), 'pane footer shows plugin version v0.2.8')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice
@@ -594,6 +605,7 @@ store.recent = [
 // Stale persisted lastSignal (same as the OLDEST row) — must NOT win the card.
 store.lastSignal = { symbol: 'AUDUSD', direction: 'buy', kelly: 0.04, regime: 'high_vol_bull', entry: 0.695, stop: 0.691, take: 0.705, ts: tOrd1 }
 store.unread = 0
+store.qualifiedCount60m = 4 // 4 TTL-fresh rows → shared count source of truth (matches widget/chip/toast)
 store._persist()
 stub.reset()
 stub.setRenderFn(() => pane.render())
@@ -618,7 +630,7 @@ store.watermark = null
 store.newestTs = null
 store.recent = []
 store.lastSignal = null
-store._toastCount = 0
+store.qualifiedCount60m = 0 // v0.2.8: shared count source of truth (was _toastCount)
 const batchT = []
 for (let i = 0; i < 15; i++) {
   batchT.push(new Date(Date.now() - (i + 1) * 60 * 1000).toISOString()) // t[0]=newest
@@ -679,7 +691,7 @@ walk(stub.getLatestRoot(), acc)
 const hasText = (t) => acc.texts.some((x) => x.includes(t))
 
 assert(acc.texts.some((x) => x.includes('Talaria By Noble Trading App')), 'dashboard root renders (header present)')
-  assert(acc.texts.some((x) => x.includes('Copyright - Lexington Tech LLC')), 'dashboard root renders (footer copyright present)')
+  assert(acc.texts.some((x) => x.includes('Copyright - Noble Trading App & Lexington Tech LLC')), 'dashboard root renders (footer copyright present)')
 assert(hasText('Hot signals'), 'hot-signal banner + stat render')
 assert(acc.classes.some((c) => c.includes('tla-hot-card')), 'banner visible (seed signal within 10m TTL)')
 assert(hasText('Kelly by symbol'), 'kelly table panel renders (replaced histogram)')
@@ -710,6 +722,18 @@ assert(acc.texts.some((x) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}( [A-Z]+)?$/.test(x)
 assert(hasText('Precision Pro'), 'plan stat shows Precision Pro')
 assert(hasText('XAUUSD'), 'symbol list / chips render symbols')
 assert(hasText('Connecting') || hasText('Live'), 'realtime stat reflects socket state')
+
+// UX harmonization (v0.2.8): hot signals timestamp in user LOCAL timezone (not UTC),
+// plan panel shows "Subscription Active · Token Valid", symbols panel shows plan name,
+// kelly table panel header + description have NO "sweep"/"nt_sweep_result" references.
+assert(!acc.texts.some((t) => /as of.*UTC/.test(t)), 'hot signals timestamp uses LOCAL timezone, not UTC')
+assert(acc.texts.some((t) => /Subscription Active/.test(t)), 'plan panel shows "Subscription Active"')
+assert(acc.texts.some((t) => /Token Valid/.test(t)), 'plan panel shows "Token Valid" (no claim re-check text)')
+assert(!acc.texts.some((t) => /nt_symbol plan_ids/.test(t)), 'symbols panel shows plan name, not nt_symbol plan_ids')
+// Kelly panel: header is "Kelly by symbol" (no "sweep" suffix); description
+// says "Latest signal per symbol" (no "nt_sweep_result" or "sweep" text).
+assert(acc.texts.some((t) => t === 'Kelly by symbol'), 'kelly panel header is "Kelly by symbol" (no sweep suffix)')
+assert(acc.texts.some((t) => /Latest signal per symbol/.test(t) && !/nt_sweep_result/.test(t)), 'kelly panel description says "Latest signal per symbol" — no nt_sweep_result')
 
 // --- NEW analytics sections (Phase 1-3) ---
 assert(hasText('Signal health'), 'signal health scoreboard renders (all plans)')

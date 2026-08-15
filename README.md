@@ -38,6 +38,40 @@ action behind each signal:
 
 **Deploy:** `talaria-plugin-v0.2.7.zip` release archive available.
 
+## What's in this release (v0.2.8)
+
+**Count harmonization — all 4 surfaces now agree.**
+
+| Change | Detail |
+|---|---|
+| **Toast `+N more` → `<N> live signals`** | The `+N` was a cumulative toasts-fired counter (since last `markSeen()`), not a signal count. The toast footer now reads the shared `signalStore.qualifiedCount60m` — a Supabase `COUNT(qualified=eq.true, sweep_timestamp >= now−60m)` — so the toast and widget badge always show the same number. |
+| **Toast footer reordered** | Regime label (🐂/🐻) now appears **first**, before datetime and age: `🐂 High-vol bull · 2026-08-14 … · 22m ago · N live signals`. |
+| **Chip badge** | Now uses the shared `signalStore.qualifiedCount60m` (was TTL-filtered `snap.recent` capped at `RECENT_MAX=12`). |
+| **Dashboard stat** | Renamed "Hot signals (10m)" → "Qualified signals", reads the shared 60m count, and subscribes to the store for live updates. |
+| **Widget pane badge** | Was already referencing `qualifiedCount60m` (2026-08-11 WIP) but the field was never populated — now it is, via the shared poll's COUNT query. |
+
+### Dashboard UX refinements
+| Change | Detail |
+|---|---|
+| **Hot signals timestamp → local** | Changed from UTC (`as of 2026-08-15 00:05 UTC`) to the user's local timezone via `toLocaleString()`. |
+| **Plan panel labels** | `status active · claim re-check 24h` → `Subscription Active · Token Valid`. |
+| **Symbols panel label** | `from nt_symbol plan_ids` → the plan name (e.g. `Precision Pro`). |
+| **Kelly table panel** | Removed `sweep` / `nt_sweep_result` references from the panel header and description text ("Latest signal per symbol"). |
+
+**Deploy:** `talaria-plugin-v0.2.8.zip` release archive available.
+
+## What's in this release (v0.2.7)
+
+**Widget poll truncation fix — the widget pane could never show the newest signal.**
+
+| Change | Detail |
+|---|---|
+| **Poll feed order** | The 20-row poll fetched newest-first and fed into `addSignal` unconditionally — but `addSignal` does `recent = [row, ...recent].slice(0, RECENT_MAX=12)` (unshift to front), so after 20 newest-first feeds the newest rows sat at the array **tail** and got truncated. Now the loop reverses: feeds oldest→newest so the newest survives at `recent[0]`. |
+| **Only newest toasts** | `suppressToast` now flips to `!isNewest` — only the last-fed (newest) row toasts; older rows in the same batch update the store without replacing the toast. |
+| **Re-render on every poll** | `addSignal` always `_emit()`s after a `recent[]` update — re-seen rows (ts ≤ watermark) still notify the pane so it re-renders between sweep ticks. |
+
+**Deploy:** `talaria-plugin-v0.2.7.zip` release archive available.
+
 ## What's in this release (v0.2.6)
 
 **Toast freshness fix + widget polling speed.**
@@ -150,8 +184,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.7.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.7.zip
+# Download talaria-plugin-v0.2.8.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.8.zip
 SRC=talaria-plugin/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
@@ -330,4 +364,4 @@ where your subscription is handled.
 
 ---
 
-Copyright © Lexington Tech LLC
+Copyright © Noble Trading App & Lexington Tech LLC
