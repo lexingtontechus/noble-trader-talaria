@@ -675,29 +675,9 @@ function TalariaKellyTable({ sweeps, symbols }) {
       }),
     ),
   ),
-    // Below-table context: TimesFM forecast | EV | P_win for the most-qualified symbol
-    ctxRow.symbol && React.createElement('div', { className: 'tla-grid', style: { marginTop: 12 } },
-      React.createElement(StatCard, {
-        title: 'TimesFM forecast — ' + ctxRow.symbol,
-        value: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? '📈 ' : '📉 ') + fmtKellyPct(ctxRow.p_timesfm) : '⏳ unavailable',
-        sub: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '')
-          ? ctxRow.p_timesfm > 0.5 ? 'bullish skew > 50%' : 'bearish skew < 50%'
-          : 'no TimesFM model run yet',
-        tone: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? 'pos' : 'neg') : undefined,
-      }),
-      React.createElement(StatCard, {
-        title: 'EV — ' + ctxRow.symbol,
-        value: (ctxRow.ev != null && ctxRow.ev !== '') ? '$' + Number(ctxRow.ev).toFixed(2) : '—',
-        sub: 'expected value per $ of risk',
-        tone: (ctxRow.ev != null && ctxRow.ev !== '') ? (Number(ctxRow.ev) > 0 ? 'pos' : Number(ctxRow.ev) < 0 ? 'neg' : undefined) : undefined,
-      }),
-      React.createElement(StatCard, {
-        title: 'P_win — ' + ctxRow.symbol,
-        value: (ctxRow.p_win != null && ctxRow.p_win !== '') ? fmtKellyPct(ctxRow.p_win) : '—',
-        sub: 'predicted probability of winning',
-        tone: (ctxRow.p_win != null && ctxRow.p_win !== '') ? (Number(ctxRow.p_win) >= 0.6 ? 'pos' : Number(ctxRow.p_win) <= 0.4 ? 'neg' : 'warn') : undefined,
-      }),
-    ),
+    // Below-table context removed (2026-08-15): EV, P_win, and TimesFM forecast
+    // are now a single standalone panel below Markov + pattern in the dashboard.
+    // This table only renders the table itself.
   )
 }
 
@@ -2043,6 +2023,14 @@ function TalariaDashboard({ config, claim }) {
     const pattern = brickPattern(brickWindow)
     const markov = markovUpProbability(brickSeriesAsc.map((b) => Number(b.close_price)))
 
+    // Most-qualified symbol's latest sweep row — used for the standalone
+    // TimesFM forecast card (moved below Markov + pattern, 2026-08-15).
+    const sweepRowsCtx = (sweeps.data || [])
+    const latestBySymCtx = {}
+    for (const r of sweepRowsCtx) { if (!latestBySymCtx[r.symbol]) latestBySymCtx[r.symbol] = r }
+    const ctxRow = Object.values(latestBySymCtx).find((r) => r.qualified)
+      || Object.values(latestBySymCtx)[0] || {}
+
     // Signal health scoreboard: per-symbol Wilson lower bound + BH-FDR over
     // the two-sided binomial p-values (null: true win rate = 50%).
     const sigHealthRows = (signalHealth.data || []) || []
@@ -2146,13 +2134,45 @@ function TalariaDashboard({ config, claim }) {
         `Analyzes the symbol selected in the chart above (${activeBrickSym || 'none'}). Nuance: Brick pattern = the last 10 bricks only (short-term shape: 3-push / pullback / chop). Markov P(up in 3) = a 3-state UP/DOWN/FLAT Markov chain fitted on up to 200 brick closes (longer statistical fit) — the probability the next 3-brick move is UP. A 50% value means no edge; >50% leans bullish, <50% leans bearish.`),
     ),
 
+    // EV / P_win / TimesFM forecast — standalone panel (moved below Markov + pattern, 2026-08-15).
+    // Previously rendered as below-table context cards inside TalariaKellyTable.
+    // Now all three context cards (EV, P_win, p_timesfm) are a single panel below
+    // Markov + pattern, reading the most-qualified symbol's sweep row.
+    ctxRow.symbol && React.createElement('div', { className: 'tla-card' },
+      React.createElement('h3', null, 'EV / P_win / TimesFM — ' + ctxRow.symbol),
+      React.createElement('div', { className: 'tla-grid' },
+        React.createElement(StatCard, {
+          title: 'EV — ' + ctxRow.symbol,
+          value: (ctxRow.ev != null && ctxRow.ev !== '') ? '$' + Number(ctxRow.ev).toFixed(2) : '—',
+          sub: 'expected value per $ of risk',
+          tone: (ctxRow.ev != null && ctxRow.ev !== '') ? (Number(ctxRow.ev) > 0 ? 'pos' : Number(ctxRow.ev) < 0 ? 'neg' : undefined) : undefined,
+        }),
+        React.createElement(StatCard, {
+          title: 'P_win — ' + ctxRow.symbol,
+          value: (ctxRow.p_win != null && ctxRow.p_win !== '') ? fmtKellyPct(ctxRow.p_win) : '—',
+          sub: 'predicted probability of winning',
+          tone: (ctxRow.p_win != null && ctxRow.p_win !== '') ? (Number(ctxRow.p_win) >= 0.6 ? 'pos' : Number(ctxRow.p_win) <= 0.4 ? 'neg' : 'warn') : undefined,
+        }),
+        React.createElement(StatCard, {
+          title: 'p_timesfm',
+          value: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? '📈 ' : '📉 ') + fmtKellyPct(ctxRow.p_timesfm) : '⏳ unavailable',
+          sub: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '')
+            ? ctxRow.p_timesfm > 0.5 ? 'bullish skew > 50%' : 'bearish skew < 50%'
+            : 'no TimesFM model run yet',
+          tone: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? 'pos' : 'neg') : undefined,
+        }),
+      ),
+      React.createElement('div', { className: 'tla-hint' },
+        'TimesFM is a foundation-model forecast of the next price direction, expressed as a probability (p_timesfm). >50% = bullish skew; <50% = bearish skew. For the most-qualified symbol in the Kelly table below.'),
+    ),
+
     // Kelly by symbol — latest sweep (TABLE format, 2026-08-12 redesign).
-    // Moved below Markov + pattern. Groups by asset_class, sorts by symbol.
-    // Excludes brick_* columns. Below-table context: TimesFM / EV / P_win.
+    // Moved below Markov + pattern + TimesFM. Groups by asset_class, sorts by symbol.
+    // Excludes brick_* columns. Below-table context: EV / P_win only (TimesFM is above).
     React.createElement('div', { className: 'tla-card' },
       React.createElement('h3', null, 'Kelly by symbol'),
       React.createElement('div', { className: 'tla-explainer' },
-        'Latest signal per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. Below-table context cards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest signal did NOT qualify — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
+        'Latest signal per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. The EV, P_win, and TimesFM forecast panels (below Markov + pattern) show metrics for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest signal did NOT qualify — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
       React.createElement(TalariaKellyTable, { sweeps, symbols }),
     ),
 

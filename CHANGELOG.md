@@ -3,7 +3,115 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.8-remote] — 2026-08-14
+
+### Summary
+
+**Talaria Remote Gateway — web dashboard plugin scaffold built.** A new
+`dashboard/` directory ships the headless-gateway counterpart to the desktop
+plugin (`desktop/plugin.js`), mirroring the kanban board's dual-plugin pattern.
+The dashboard plugin renders the Talaria signal feed on remote/cloud Hermes
+gateways via the web dashboard's plugin system — no Electron required.
+
+| Feature | Desktop plugin (`desktop/plugin.js`) | Dashboard plugin (`dashboard/dist/index.js`) |
+|---|---|---|
+| Registration | `export default { register(ctx) }` → `ctx.registerMany([...])` | `window.__HERMES_PLUGINS__.register('talaria', Component)` |
+| React | `@hermes/plugin-sdk` (ESM import) | `window.__HERMES_PLUGIN_SDK__` (runtime resolution) |
+| Data transport | `ctx.rest()` / `ctx.socket()` → Electron IPC bridge | Direct `fetch()` / `WebSocket` (browser HTTP) |
+| Data source | Supabase REST + Phoenix Realtime (direct) | Supabase REST + Phoenix Realtime (direct) |
+| Backend | None (pure frontend) | `dashboard/plugin_api.py` — optional proxy endpoints |
+| Build | Plain JS (no build step) | Plain JS IIFE (no build step, no JSX) |
+
+### Added
+
+- **`dashboard/manifest.json`** — name `talaria`, label "Talaria", tab path
+  `/talaria` positioned `after:skills`, entry `dist/index.js`, css
+  `dist/style.css`, api `plugin_api.py`. Mirrors the kanban dashboard plugin
+  manifest structure.
+- **`dashboard/dist/index.js`** — plain IIFE plugin bundle (~61KB). Resolves
+  React/hooks/components from `window.__HERMES_PLUGIN_SDK__` at runtime.
+  Includes full claim-check routing (ConnectTab / SubscribeScreen / WaitingScreen
+  / PaywallScreen / TalariaPage), shared signal store (with 2026-08-14
+  truncation fix), 10s REST poll, Phoenix Realtime WebSocket, and all dashboard
+  components (StatCard, TalariaKellyTable, RenkoBrickChart, SignalHealthTable,
+  CalibTable, HotSignalsBanner).
+- **`dashboard/dist/style.css`** — prefixed `tla-` stylesheet (9KB) to avoid
+  collisions with host app styles and the `nta-` namespace.
+- **`dashboard/plugin_api.py`** — FastAPI router mounted at `/api/plugins/talaria/`.
+  Provides optional proxy endpoints: `/health`, `/config`, `/claim-check`,
+  `/symbols`, `/sweeps/latest`, `/signals/count`. For deployments behind a
+  strict firewall that blocks browser → Supabase access.
+
+### Verification
+
+- `node --check dist/index.js` — JS syntax OK
+- `python3 -c "ast.parse(...)"` on `plugin_api.py` — Python syntax OK
+- Manifest JSON parsed — all required fields present and correctly pathed
+- Discovery simulation — `_discover_dashboard_plugins()` would find and serve
+  the plugin (source=bundled, bypasses plugins.enabled gate)
+
+### Install (headless gateway)
+
+```bash
+# Install to user plugins directory
+mkdir -p ~/.hermes/plugins/talaria
+cp -r dashboard/ ~/.hermes/plugins/talaria/dashboard/
+hermes plugins enable talaria   # REQUIRED — assets 404 unless enabled
+# refresh the dashboard: sidebar → Talaria tab
+```
+
 ## [v0.2.8] — 2026-08-14
+
+### Summary
+
+**Panel consolidation: EV, P_win, and TimesFM forecast all moved to a single
+standalone panel below Markov + pattern.**
+
+Previously EV, P_win, and TimesFM forecast were below-table context cards
+nested inside the "Kelly by symbol" panel. All three have been pulled out
+to a **single standalone panel positioned below the Markov + pattern card**
+in all three plugin surfaces, matching the dashboard screenshot layout
+(EV | P_win | TimesFM side-by-side):
+
+| Surface | File | Location |
+|---------|------|----------|
+| Talaria desktop | `plugins/talaria/desktop/plugin.js` | Between Markov + pattern card and Kelly table card |
+| Admin desktop | `noble-trader-hermes-plugins/.hermes/plugins/noble-trader-admin/desktop/plugin.js` | Between Markov + pattern card and Kelly table card |
+| Talaria dashboard | `plugins/talaria/dashboard/dist/index.js` | New panel added between Renko bricks and Kelly table |
+
+### Added
+
+- **Talaria dashboard plugin** (`dashboard/`) now includes a Markov + pattern
+  card and a standalone EV / P_win / TimesFM panel, matching the desktop
+  plugin's panel structure. The dashboard plugin (`dist/index.js`) is a compiled
+  IIFE; a `brickPattern()` helper and `ctxRowDash` computation were added inline.
+- **Dashboard render harness** (`test_dashboard_render_harness.mjs`) — new
+  test harness for the web dashboard plugin. Loads `dist/index.js` via
+  `vm.runInThisContext`, stubs `window.__HERMES_PLUGIN_SDK__` + browser globals,
+  drives the component through its async claim-check + data-fetch lifecycle, and
+  asserts all 14 panel text/card assertions render. All PASS.
+- **Dashboard plugin copied to master codebase repo** — `noble-trader-hermes-plugins/.hermes/plugins/talaria/dashboard/` now mirrors the public deployment repo.
+
+### Changed
+
+- **TimesFM + EV + P_win panel consolidation** (all 3 surfaces): extracted
+  all three from below-table context inside the Kelly table to a single
+  standalone panel below Markov + pattern. EV and P_win are now in the
+  standalone panel (were below-table before).
+- **Talaria desktop + admin desktop**: `ctxRow`/`adminCtxRow` computation
+  lifted to the dashboard render body (was inside the Kelly table component),
+  so the standalone panel can read the most-qualified symbol's metrics.
+- **Test harness assertions updated**: EV/P_win/TimesFM assertions now check
+  for "standalone panel" location (below Markov + pattern) with combined
+  EV/P_win/TimesFM heading, rather than "below-table context".
+
+### Security
+
+- **No secrets exposed.** The `sb_publishable_...` key in the dashboard plugin
+  (`plugin_api.py`, `dist/index.js`, `README.md`) is a Supabase **publishable
+  anonymous key** by design — it has read-only RLS access and is intended to be
+  embedded in client-side code. No service-role keys, JWTs, or claim tokens are
+  hardcoded. The `.gitignore` covers `.env`, `*.zip`, and `node_modules/`.
 
 ### Summary
 
@@ -38,12 +146,6 @@ count uses the shared 60m qualified count instead of the cumulative
 - **Copyright footer updated** to "Copyright - Noble Trading App & Lexington
   Tech LLC" across both dashboard and pane footers in both `plugin.js` copies.
 - **Stale example text removed** from the "Paper vs equal-weight" explainer —
-  the inline example referencing "08-06 showed −$448 because 362 signals..."
-  was outdated (post-purge actual: 08-06 Paper $0, Equal-wt $1,793.62,
-  Delta -$1,793.62). The timing-mismatch explanation is kept; the specific
-  stale numbers are removed.
-
-### Added
 
 - `fetchSupabaseCount` helper — PostgREST `Prefer: count=exact` →
   `X-Total-Count` header, for the shared 60m COUNT query.

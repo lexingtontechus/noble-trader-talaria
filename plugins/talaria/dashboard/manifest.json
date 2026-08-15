@@ -1,0 +1,15 @@
+{
+  "name": "talaria",
+  "label": "Talaria",
+  "description": "Live Noble Trader signal feed for headless Hermes gateway instances",
+  "icon": "Signal",
+  "version": "0.2.8",
+  "tab": {
+    "path": "/talaria",
+    "position": "after:skills"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py",
+  "sdk_version": "1.0.0"
+}

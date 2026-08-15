@@ -17,6 +17,7 @@ client-facing artifacts so any Hermes user can install them:
 | Desktop plugin (UI) | `plugins/talaria/desktop/plugin.js` | Hermes Electron runtime page — dashboard, charts, hot signals, paper analytics |
 | Root plugin copy | `plugins/talaria/plugin.js` | **Must stay byte-identical** to `desktop/plugin.js` (Electron may load either) |
 | Render harness | `plugins/talaria/desktop/test_talaria_render_harness.mjs` | Node render tests for the UI |
+| Dashboard plugin (web) | `plugins/talaria/dashboard/` | Headless gateway web dashboard — `manifest.json` (entry=`dist/index.js`, css=`dist/style.css`, api=`plugin_api.py`) + harness `test_dashboard_render_harness.mjs` |
 | Python tools plugin | `plugins/talaria-tools/` | In-chat agent tools: `talaria_health`, `talaria_stats`, `talaria_calibration` |
 | Cron notifiers | `scripts/talaria_digest.py`, `scripts/talaria_signal_notify.py` | Daily digest + live signal watcher (Hermes cron) |
 | Schema contract | `supabase/migrations/` | Views/tables the plugin reads (anon RLS) |
@@ -56,13 +57,40 @@ hermes config set plugins.enabled '["talaria"]' --profile <your-profile>
 1. `node --check plugins/talaria/desktop/plugin.js` → exit 0
 2. `node plugins/talaria/desktop/test_talaria_render_harness.mjs` → all PASS
 3. `cmp plugins/talaria/desktop/plugin.js plugins/talaria/plugin.js` → identical
-4. Open `/talaria` in the desktop app → Connect tab → dashboard renders
+4. `node --check plugins/talaria/dashboard/dist/index.js` → exit 0
+5. `node plugins/talaria/dashboard/test_dashboard_render_harness.mjs` → all PASS (web dashboard)
+6. Open `/talaria` in the desktop app → Connect tab → dashboard renders
+
+## Install (headless gateway / web dashboard)
+
+For remote/cloud gateway instances (no Electron), install the dashboard
+plugin instead of or in addition to the desktop plugin:
+
+```bash
+# Install to your Hermes home user plugins directory
+mkdir -p ~/.hermes/plugins/talaria
+cp -r plugins/talaria/dashboard/ ~/.hermes/plugins/talaria/dashboard/
+
+# Enable the plugin (REQUIRED — assets 404 unless enabled)
+hermes plugins enable talaria --profile <your-profile>
+
+# Start the headless gateway with the web dashboard
+hermes serve --host 0.0.0.0 --port 9119
+
+# Open http://<gateway-host>:9119/talaria in any browser
+```
+
+The dashboard plugin talks to Supabase directly (anon read-only key) — no
+claim token or secrets needed on the server side. Users paste their claim
+token in the browser-based Connect tab.
 
 ## Release checklist (hermes-vault style)
 
 - [ ] Bump `plugin.yaml` version + package version
 - [ ] Run harness + `node --check` + `cmp` byte-verify
+- [ ] `node --check plugins/talaria/dashboard/dist/index.js` + harness PASS (web dashboard)
 - [ ] Regenerate daisyUI bundle if plugin classNames changed (`tailwind.plugin.bundle.css` re-embed)
 - [ ] Tag `v0.x.0` + push (requires explicit "push git")
 - [ ] GitHub Release with install notes (copy the Install section above)
 - [ ] Smoke: fresh-home install per the Install section, dashboard + one tool call
+- [ ] Smoke: headless gateway install (copy above), `hermes serve` + browser open `/talaria`

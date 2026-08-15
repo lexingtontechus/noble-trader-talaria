@@ -60,6 +60,47 @@ action behind each signal:
 
 **Deploy:** `talaria-plugin-v0.2.8.zip` release archive available.
 
+## What's in this release (v0.2.8-remote)
+
+**Talaria Remote Gateway — web dashboard plugin.** A new `dashboard/` directory
+ships the headless-gateway counterpart to the desktop plugin. This lets you
+run a 24/7 remote/cloud Hermes gateway (no Electron) and view Talaria signals
+in the web dashboard.
+
+**Two installation paths — one for each use case:**
+
+| You... | Install this | Where it runs |
+|---|---|---|
+| Use Hermes **Desktop** (Electron) | `talaria-plugin-v0.2.8.zip` → `desktop-plugins/talaria/` | Local Electron app |
+| Run a **remote/cloud gateway** and want the web dashboard | `talaria-v0.2.8-remote-dashboard.tar.gz` → `~/.hermes/plugins/talaria/` + `hermes plugins enable talaria` | Gateway web browser |
+
+### Web dashboard plugin (`dashboard/`)
+
+- **Same data path** — talks to Supabase directly (anon read-only key), identical
+  to the desktop plugin. No local server or secrets required.
+- **Same signal logic** — shared signal store, claim-check routing, Supabase
+  REST + Phoenix Realtime WebSocket, kelly table, renko charts, signal health.
+- **Dashboard plugin contract** — plain IIFE loaded via `<script>` tag by the
+  Hermes web dashboard. Uses `window.__HERMES_PLUGIN_SDK__` for React/hooks,
+  registers via `window.__HERMES_PLUGINS__.register('talaria', Component)`.
+- **Backend proxy** (`dashboard/plugin_api.py`) — optional FastAPI router at
+  `/api/plugins/talaria/` for deployments behind strict firewalls.
+
+### Install on a remote gateway
+
+```bash
+# Download the dashboard plugin release
+gh release download talaria-v0.2.8-remote -R lexingtontechus/noble-trader-talaria --pattern '*dashboard*'
+# Extract to your Hermes home
+mkdir -p ~/.hermes/plugins/talaria
+cp -r dashboard/ ~/.hermes/plugins/talaria/dashboard/
+# Enable it (required — assets 404 unless enabled)
+hermes plugins enable talaria
+# Start the headless gateway with the dashboard
+hermes serve --host 0.0.0.0 --port 9119
+# Open http://your-gateway:9119/talaria in any browser
+```
+
 ## What's in this release (v0.2.7)
 
 **Widget poll truncation fix — the widget pane could never show the newest signal.**
@@ -354,6 +395,7 @@ qualified signals and clears when the last signal ages out.
 - [talaria-client skill](skills/trading/talaria-client/SKILL.md) — what your agent can answer for you
 - [OPERATIONS.md](docs/OPERATIONS.md) — operator/deploy notes
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) — repo structure, install details, release checklist
+- [ROADMAP.md](roadmap.md) — web dashboard plugin delivery plan and implementation notes
 
 ## Subscribe
 
