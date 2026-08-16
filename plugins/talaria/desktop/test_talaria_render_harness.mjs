@@ -392,6 +392,7 @@ const paneAcc = { texts: [], classes: [] }
 walk(stub.getLatestRoot(), paneAcc)
 assert(paneAcc.texts.some((x) => x.includes('Talaria signals')), 'signals-pane renders Talaria signals header')
 assert(paneAcc.classes.some((c) => c.includes('tla-pane-root')), 'signals-pane uses tla-pane-root class')
+assert(paneAcc.classes.some((c) => c.includes('tla-mark')), 'signals-pane header renders TalariaMark SVG (tla-mark class)')
 
 // Re-arm the chip render for the chip assertions below.
 stub.reset()
@@ -581,7 +582,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.8')), 'pane footer shows plugin version v0.2.8')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.10')), 'pane footer shows plugin version v0.2.10')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice
@@ -630,7 +631,7 @@ store.watermark = null
 store.newestTs = null
 store.recent = []
 store.lastSignal = null
-store.qualifiedCount60m = 0 // v0.2.8: shared count source of truth (was _toastCount)
+store.qualifiedCount60m = 0 // v0.2.10: shared count source of truth (was _toastCount)
 const batchT = []
 for (let i = 0; i < 15; i++) {
   batchT.push(new Date(Date.now() - (i + 1) * 60 * 1000).toISOString()) // t[0]=newest
@@ -690,7 +691,8 @@ const acc = { texts: [], classes: [] }
 walk(stub.getLatestRoot(), acc)
 const hasText = (t) => acc.texts.some((x) => x.includes(t))
 
-assert(acc.texts.some((x) => x.includes('Talaria By Noble Trading App')), 'dashboard root renders (header present)')
+assert(acc.texts.some((x) => x.includes('Talaria · Noble Trading App')), 'dashboard root renders (header present with TalariaMark)')
+  assert(acc.classes.some((c) => c.includes('tla-mark')), 'dashboard header renders TalariaMark SVG (tla-mark class)')
   assert(acc.texts.some((x) => x.includes('Copyright - Noble Trading App & Lexington Tech LLC')), 'dashboard root renders (footer copyright present)')
 assert(hasText('Hot signals'), 'hot-signal banner + stat render')
 assert(acc.classes.some((c) => c.includes('tla-hot-card')), 'banner visible (seed signal within 10m TTL)')
@@ -701,11 +703,14 @@ assert(hasText('Markov P(dn)'), 'kelly table header shows Markov P(dn) column')
 assert(hasText('Prev regime'), 'kelly table header shows Prev regime column')
 assert(hasText('P_win'), 'kelly table header shows P_win column')
 assert(hasText('TimesFM'), 'kelly table header shows TimesFM column')
-// Standalone EV / P_win / TimesFM panel (moved below Markov + pattern, 2026-08-15)
-assert(acc.texts.some((x) => x.includes('EV / P_win / TimesFM')), 'standalone EV/P_win/TimesFM panel renders for qualified symbol (below Markov + pattern)')
-assert(acc.texts.some((x) => x.includes('EV — XAUUSD')), 'standalone panel: EV card renders for qualified symbol')
-assert(acc.texts.some((x) => x.includes('P_win — XAUUSD')), 'standalone panel: P_win card renders for qualified symbol')
-assert(acc.texts.some((x) => x.includes('\ud83d\udcc8')), 'standalone TimesFM card shows bullish forecast for XAUUSD')
+// Standalone EV / P_win / TimesFM forecast panel (moved below Markov + pattern, 2026-08-15)
+assert(acc.texts.some((x) => x.includes('EV / P_win / TimesFM — XAUUSD')), 'standalone EV/P_win/TimesFM panel renders for qualified symbol (below Markov + pattern)')
+assert(acc.texts.some((x) => x.includes('EV / P_win / TimesFM — XAUUSD')), 'EV/P_win/TimesFM panel syncs to activeBrickSym (XAUUSD = default), not most-qualified fallback')
+// Below-table context cards must show EV / P_win for most-qualified symbol (XAUUSD)
+assert(acc.texts.some((x) => x.includes('EV — XAUUSD')), 'below-table context: EV card renders for qualified symbol')
+assert(acc.texts.some((x) => x.includes('P_win — XAUUSD')), 'below-table context: P_win card renders for qualified symbol')
+// XAUUSD (most-qualified) has p_timesfm=0.58 → standalone card shows forecast, not unavailable
+assert(acc.texts.some((x) => x.includes('📈')), 'standalone TimesFM card shows bullish forecast for XAUUSD')
 assert(hasText('Renko bricks'), 'renko chart card renders')
 assert(hasText('10 bricks'), 'renko chart window hint renders')
 assert(hasText('levels:'), 'renko pricing legend row renders (all symbols)')
@@ -722,7 +727,7 @@ assert(hasText('Precision Pro'), 'plan stat shows Precision Pro')
 assert(hasText('XAUUSD'), 'symbol list / chips render symbols')
 assert(hasText('Connecting') || hasText('Live'), 'realtime stat reflects socket state')
 
-// UX harmonization (v0.2.8): hot signals timestamp in user LOCAL timezone (not UTC),
+// UX harmonization (v0.2.10): hot signals timestamp in user LOCAL timezone (not UTC),
 // plan panel shows "Subscription Active · Token Valid", symbols panel shows plan name,
 // kelly table panel header + description have NO "sweep"/"nt_sweep_result" references.
 assert(!acc.texts.some((t) => /as of.*UTC/.test(t)), 'hot signals timestamp uses LOCAL timezone, not UTC')
@@ -759,7 +764,8 @@ try { stub.renderOnce() } catch (e) { threw2 = e }
 assert(!threw2, 'no-config render threw nothing')
 const acc2 = { texts: [], classes: [] }
 walk(stub.getLatestRoot(), acc2)
-assert(acc2.texts.some((x) => x.includes('Talaria — Connect')), 'Connect tab renders without config')
+assert(acc2.texts.some((x) => x.includes('Talaria · Connect')), 'Connect tab renders without config (with TalariaMark)')
+assert(acc2.classes.some((c) => c.includes('tla-mark')), 'Connect tab header renders TalariaMark SVG (tla-mark class)')
 assert(acc2.texts.some((x) => x.includes('Claim token')), 'Connect tab has claim token field')
 assert(acc2.texts.some((x) => x.includes('Save & Validate')), 'Connect tab has save button')
 // Option A (2026-08-10): service URL + anon key are embedded defaults and

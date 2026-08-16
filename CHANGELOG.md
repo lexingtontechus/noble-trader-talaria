@@ -3,6 +3,68 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.10] — 2026-08-15
+
+### Summary
+
+**EV / P_win / TimesFM panel now syncs to the Renko panel's selected symbol.**
+Previously the standalone EV/P_win/TimesFM panel (consolidated in v0.2.8/v0.2.9)
+always showed the *most-qualified* symbol's metrics, ignoring the symbol the user
+selected in the Renko bricks panel. Now the panel filters sweep data by
+`activeBrickSym` (the Renko-selected symbol), falling back to the most-qualified
+row only when no data exists for the selected symbol.
+
+### Fixed
+
+- **Symbol desync in EV / P_win / TimesFM panel.** In both the Talaria desktop
+  plugin (`desktop/plugin.js:2046`) and the Noble Trader Admin plugin
+  (`noble-trader-admin/desktop/plugin.js:1373`), `ctxRow` / `adminCtxRow` was
+  computed as `Object.values(latestBySymCtx).find((r) => r.qualified)` — picking
+  the first qualified row from the 20-newest sweep batch, regardless of the
+  user's Renko panel selection. Changed to
+  `Object.values(latestBySymCtx).find((r) => r.symbol === activeBrickSym)` with
+  the old qualified-row fallback preserved. The Renko/Markov/Kelly panels already
+  used `activeBrickSym`; this was the only panel that didn't sync.
+- **Version string bump** — `PLUGIN_VERSION` was stuck at `0.2.8` despite the
+  v0.2.9 panel-consolidation release. Bumped to `0.2.10` in all 4 plugin.js
+  copies (desktop + root, hermes-plugins + talaria repo) and all runtime
+  AppData locations. Test harness version assertions updated to `v0.2.10`.
+
+### Changed
+
+- **TalariaMark SVG component** added to all 3 header surfaces in the desktop
+  plugin (dashboard root header, ConnectTab header, widget pane header) with
+  `.tla-mark` CSS class (broad-bolt icon, bronze `#B8823D`). Previously only
+  the dashboard `dist/` bundle had the logo; the desktop `plugin.js` (what
+  Electron actually loads) had plain-text headers.
+- **`.tla-header` CSS** updated with `gap: 8px` (was missing, causing logo +
+  text to touch) and `.tla-mark { display: inline-block; flex-shrink: 0; }`
+  rule added.
+- **Admin dashboard** (`noble-trader-admin/desktop/plugin.js`) — created a new
+  `nta-header` element (did not exist before) with `AdminTalariaMark` SVG +
+  `'Noble Trader Admin'` title at the root of the plugin, with `nta-header` /
+  `.nta-mark` CSS rules.
+- **Header text format** changed: `'Talaria By Noble Trading App'` →
+  `'Talaria · Noble Trading App'` and `'Talaria — Connect'` →
+  `'Talaria · Connect'` (dot-separated format matching the dashboard plugin's
+  existing convention from commit `751c310`).
+
+### Tests
+
+- `test_talaria_render_harness.mjs` — added assertion: `EV/P_win/TimesFM panel
+  syncs to activeBrickSym (XAUUSD = default), not most-qualified fallback`.
+  Version footer assertion updated `v0.2.8` → `v0.2.10`. All 97 assertions PASS.
+- `test_nta_render_harness.mjs` — updated EV/P_win/TimesFM assertions to
+  expect XAUUSD (the default `activeBrickSym`) instead of USDCAD (most-qualified).
+  Added `nta-mark` class assertion for admin dashboard header. All 36 assertions
+  PASS.
+
+### Deploy
+
+- All 4 plugin.js copies synced to root-level + desktop-level + 2 runtime
+  AppData locations + talaria repo mirror. Byte-verified identical.
+- Release zip: `talaria-plugin-v0.2.10.zip`
+
 ## [v0.2.9] — 2026-08-15
 
 ### Summary
