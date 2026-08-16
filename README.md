@@ -21,9 +21,13 @@ secrets on your machine. The plugin talks to Supabase directly with a public
 Live signals, ranked by edge — with the renko brick chart showing the price
 action behind each signal:
 
-| Dashboard | Renko chart |
+| Dashboard | Signals panel |
 |---|---|
-| ![Talaria dashboard](docs/screenshots/dashboard.png) | ![Talaria renko chart](docs/screenshots/charts.png) |
+| ![Talaria dashboard — full Hermes interface with signals panel and toast notification](docs/screenshots/talaria1.png) | ![Talaria signals panel — live feed of qualified signals with entry/SL/TP](docs/screenshots/talaria2.png) |
+
+| Renko brick analysis | Navigation & sidebar |
+|---|---|
+| ![Talaria renko chart — MARKOV + PATTERN analysis with EV/P_win/TimesFM cards and Kelly table](docs/screenshots/talaria3.png) | ![Talaria sidebar — session navigation + live signals feed](docs/screenshots/talaria4.png) |
 
 ---
 
