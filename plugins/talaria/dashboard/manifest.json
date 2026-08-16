@@ -2,7 +2,7 @@
   "name": "talaria",
   "label": "Talaria",
   "description": "Live Noble Trader signal feed for headless Hermes gateway instances",
-  "icon": "Signal",
+  "icon": "Activity",
   "version": "0.2.8",
   "tab": {
     "path": "/talaria",
