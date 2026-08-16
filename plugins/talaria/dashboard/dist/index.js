@@ -701,7 +701,36 @@
     );
   }
 
-  function TalariaKellyTable(props) {
+    function TalariaMark(_ref) {
+      var className = _ref.className !== undefined ? _ref.className : 'tla-mark';
+      var size = _ref.size !== undefined ? _ref.size : 24;
+      var color = _ref.color !== undefined ? _ref.color : '#B8823D';
+      return h('svg', {
+        className: className,
+        width: size,
+        height: size,
+        viewBox: '0 0 100 100',
+        'aria-hidden': true,
+        style: {
+          display: 'inline-block',
+          flexShrink: '0',
+          width: size + 'px',
+          height: size + 'px',
+        },
+      },
+        h('circle', { cx: 24, cy: 76, r: 8, fill: 'none', stroke: color, 'stroke-width': 6 }),
+        h('path', {
+          d: 'M28 70 L44 50 L38 64 L56 40 L48 58 L68 32 L58 52 L82 18 L70 46 L88 8',
+          fill: 'none',
+          stroke: color,
+          'stroke-width': 11,
+          'stroke-linejoin': 'miter',
+          'stroke-linecap': 'butt',
+        })
+      );
+    }
+
+    function TalariaKellyTable(props) {
     var sweeps = props.sweeps.data || [];
     var symbols = props.symbols.data || [];
 
@@ -879,7 +908,7 @@
     var hasConfig = !!(config.supabase_url && config.supabase_key && config.claim_token);
 
     return h('div', { className: 'tla-root' },
-      h('div', { className: 'tla-header' }, 'Talaria · Connect'),
+      h('div', { className: 'tla-header' }, h(TalariaMark, { size: 20 }), ' Talaria · Connect'),
       h('div', { className: 'tla-card' },
         h('h3', null, 'Connection settings'),
         h('div', { className: 'tla-field' },
@@ -1096,7 +1125,7 @@
     }
 
     return h('div', { className: 'tla-root' },
-      h('div', { className: 'tla-header' }, 'Talaria · Noble Trading App'),
+      h('div', { className: 'tla-header' }, h(TalariaMark, { size: 20 }), ' Talaria · Noble Trading App'),
       h(HotSignalsBanner, { signals: bannerSignals }),
       h('div', { className: 'tla-grid' },
         h(StatCard, {
@@ -1347,7 +1376,8 @@
   var STYLE_ID = 'talaria-style';
   var CSS = [
     '.tla-root{display:flex;flex-direction:column;height:100%;gap:12px;padding:16px;overflow:auto;}',
-    '.tla-header{display:flex;align-items:center;justify-content:center;padding:10px 0 2px;font-size:1.15rem;font-weight:600;letter-spacing:.02em;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);margin-bottom:2px;}',
+    '.tla-header{display:flex;align-items:center;justify-content:center;padding:10px 0 2px;font-size:1.15rem;font-weight:600;letter-spacing:.02em;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);margin-bottom:2px;gap:8px;}',
+    '.tla-mark{display:inline-block;flex-shrink:0;}',
     '.tla-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}',
     '.tla-card{background:var(--ui-panel,#161616);border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;}',
     '.tla-card h3{margin:0;font-size:12px;font-weight:600;color:var(--ui-text-secondary,#999);text-transform:uppercase;letter-spacing:0.04em;}',

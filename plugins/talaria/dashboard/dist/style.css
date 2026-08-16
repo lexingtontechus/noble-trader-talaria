@@ -14,7 +14,8 @@
  * <link> tag may not be injected (e.g. vite dev server proxy).
  */
 .tla-root { display: flex; flex-direction: column; height: 100%; gap: 12px; padding: 16px; overflow: auto; }
-.tla-header { display: flex; align-items: center; justify-content: center; padding: 10px 0 2px; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; border-bottom: 1px solid var(--ui-stroke-secondary, #2a2a2a); margin-bottom: 2px; }
+.tla-header { display: flex; align-items: center; justify-content: center; padding: 10px 0 2px; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; border-bottom: 1px solid var(--ui-stroke-secondary, #2a2a2a); margin-bottom: 2px; gap: 8px; }
+.tla-mark { display: inline-block; flex-shrink: 0; }
 .tla-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .tla-card { background: var(--ui-panel, #161616); border: 1px solid var(--ui-stroke-secondary, #2a2a2a); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .tla-card h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--ui-text-secondary, #999); text-transform: uppercase; letter-spacing: 0.04em; }
