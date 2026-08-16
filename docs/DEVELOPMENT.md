@@ -52,6 +52,11 @@ hermes config set plugins.enabled '["talaria"]' --profile <your-profile>
 # 4. Restart the Hermes desktop app (or ⌘K → Reload desktop plugins)
 ```
 
+> **Naming convention**: Desktop plugins use the folder name as the plugin id.
+> The desktop plugin's internal `id` is `'talaria'`, so the folder must be `talaria/`.
+> The headless gateway web dashboard plugin uses the `manifest.json` `name` field
+> (`"talaria"`) and is installed to `~/.hermes/plugins/talaria/`.
+
 ## Verify after install
 
 1. `node --check plugins/talaria/desktop/plugin.js` → exit 0
@@ -69,7 +74,7 @@ plugin instead of or in addition to the desktop plugin:
 ```bash
 # Install to your Hermes home user plugins directory
 mkdir -p ~/.hermes/plugins/talaria
-cp -r plugins/talaria/dashboard/ ~/.hermes/plugins/talaria/dashboard/
+cp -r plugins/talaria/dashboard/ ~/.hermes/plugins/talaria/
 
 # Enable the plugin (REQUIRED — assets 404 unless enabled)
 hermes plugins enable talaria --profile <your-profile>
@@ -83,6 +88,13 @@ hermes serve --host 0.0.0.0 --port 9119
 The dashboard plugin talks to Supabase directly (anon read-only key) — no
 claim token or secrets needed on the server side. Users paste their claim
 token in the browser-based Connect tab.
+
+> **Troubleshooting — plugin not appearing after install:**
+> 1. Verify the folder name matches the plugin id (`talaria/`).
+> 2. Restart the Hermes desktop app (not just "Rescan").
+> 3. Clear the app's plugin cache: delete `~/.hermes/desktop-plugins/talaria/`
+>    and re-copy the file.
+> 4. Check DevTools Console (`⌘+Shift+I`) for `[talaria 0.2.8]` load errors.
 
 ## Release checklist (hermes-vault style)
 
