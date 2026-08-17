@@ -3,6 +3,51 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.11] — 2026-08-16 → 2026-08-17
+
+### Summary
+**Dashboard restructured into two tabs: Market (live, per-symbol) + Analysis (historical/retrospective).** The Market tab becomes the primary live decision surface with a universal symbol picker cascading across all per-symbol panels plus a full-width TV chart panel at the bottom (below sizing what-if). The Analysis tab holds all aggregate/historical validation views.
+
+### Added
+- **Two-tab dashboard structure** (`activeTab` state + tab bar) at `/talaria` route in BOTH desktop plugin + remote dashboard plugin:
+  - **Market tab** (default): stat cards, hot signals banner, symbol picker, Renko bricks (10-window, full-width), Markov + pattern, EV/P_win/TimesFM, **Sizing what-if** (below EV/P_win/TimesFM), **Full-width TV chart** (TradingView iframe widget, 5M candles, ENTRY/SL/TP overlay hints) (below sizing what-if)
+  - **Analysis tab**: Kelly by symbol (all symbols), signal health scoreboard (30d resolved), calibration bias (7d), paper portfolio (Pro), portfolio stats (Pro), paper vs equal-weight (Pro)
+- **TalariaWatchlist component** (REMOVED from Market tab rendering 2026-08-17) — per-symbol rows with mini-charts were too small for users to navigate/view point-in-time pricing. The Market tab now uses the full-width TV chart for the selected symbol, with all cascading panels refreshing on symbol selection.
+- **TradingView iframe widget** (`https://s.tradingview.com/widgetembed/?...`) — loads 5M candles directly from TradingView's servers (TDVA-equivalent price data) without requiring a RapidAPI key in the desktop client. Symbol mapping: internal symbols → TradingView `EXCHANGE:SYMBOL` format (OANDA:XAUUSD, OANDA:USDJPY, FOREXCOM:US500, COINBASE:BTCUSD, etc.).
+- **ENTRY/SL/TP overlay hints** — the TV chart hint footer displays signal levels from the sweep row for the selected symbol
+- **SVG fallback** — when no symbol is selected, the TV chart card shows a placeholder prompting symbol selection from the Renko panel
+
+### Changed
+- **Sizing what-if panel** moved from Analysis context to Market tab (below EV/P_win/TimesFM) — it is a live per-symbol sizing calculation driven by `activeBrickSym`, not historical analysis
+- **Analysis tab** now houses Kelly table, signal health, calibration, sizing-historical, paper portfolio/stats, and paper-vs-equal-weight — all previously on the single Market tab, grouped by purpose (validation/retrospective)
+- **Universal symbol picker** persists `activeBrickSym` across tab switches — selecting a symbol in Market keeps it selected when navigating to Analysis
+- Footer label updated: "TradingView reference chart; Talaria supplies signal levels, regime, and sizing" (was referencing Hyperliquid — no Supabase or provider name in footer)
+
+### Verified
+| - `node --check plugin.js` passes (both desktop + dashboard dist/index.js)
+||| - `node test_talaria_render_harness.mjs` — **150 PASS, 0 FAIL** (Market tab: sizing what-if + TV chart panel with TradingView iframe widget + symbol selection placeholder, Analysis tab: source-level assertions)
+||| - `node test_dashboard_render_harness.mjs` — **42 PASS, 0 FAIL**
+||| - Byte-verified deploy to 2 Electron profile dirs: identical MD5 `b46560fcbe341df6c1a85e94295796fa` (2026-08-17 15:30: chart height 240→320px, iframe key prop for symbol remount)
+
+### Data Flow
+|- **Price data for TV chart**: via TradingView iframe widget (`s.tradingview.com/widgetembed`) — loads 5M candles directly from TradingView's servers (TDVA-equivalent), no API key needed in desktop client
+|- **ENTRY/SL/TP levels**: from `nt_sweep_result` (single row per symbol, desc fetch — already in `sweepRow` variable)
+|- `nt_renko_bricks` fetch remains per-`activeBrickSym` (10-brick window for chart, 200-series for Markov) — unchanged
+- `symbolList` derivation (`nt_symbol ∩ nt_sweep_result`, plan-gated, stable ordering) reused for watchlist rows
+
+### Risks
+| Risk | Mitigation |
+|---|---|
+| **TradingView lightweight-charts CDN fails to load** | **FIXED 2026-08-17**: SVG mini-chart fallback (`<SvgMiniChart>`) renders inside every canvas div when `tvReady` is false — charts are ALWAYS visible regardless of CDN availability. The SVG renders static candle data as an inline `<svg>` with colored stroke (green/red) + shaded area. If lightweight-charts loads, it takes over the canvas (SVG hidden). This mirrors the `tonbistudio/hermes-desktop-plugins` markets plugin pattern.
+| Chart canvas memory leak (many canvases) | Store chart refs in a `Map<symbol, IChartApi>`, destroy on unmount via cleanup function |
+| Desktop + dashboard drift | Same `TalariaWatchlist` component + tab logic defined identically in both plugin.js patterns (React.createElement in desktop, h() in dashboard IIFE) |
+
+### Files Changed (scoped to `noble-trader-talaria`)
+| `plugins/talaria/desktop/plugin.js` — tab restructure + watchlist component + TDVA candle fetching + cancellation race fix |
+| `plugins/talaria/desktop/test_talaria_render_harness.mjs` — stubs (LightweightCharts, AbortSignal, TDVA candles) + assertions updated for Analysis tab source-level checks + watchlist chart assertions |
+| `plugins/talaria/dashboard/dist/index.js` — mirror tab restructure + watchlist + TDVA candle fetching + cancellation race fix |
+| `plugins/talaria/dashboard/dist/style.css` — tab bar + watchlist row CSS |
+
 ## [v0.2.10] — 2026-08-15
 
 ### Summary

@@ -3,7 +3,7 @@
   "label": "Talaria",
   "description": "Live Noble Trader signal feed for headless Hermes gateway instances",
   "icon": "Activity",
-  "version": "0.2.8",
+  "version": "0.2.11",
   "tab": {
     "path": "/talaria",
     "position": "after:skills"

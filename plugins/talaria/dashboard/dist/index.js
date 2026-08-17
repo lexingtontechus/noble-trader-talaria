@@ -1,6 +1,6 @@
 /**
  * Talaria Remote Gateway — Dashboard Plugin (Headless Gateway Surface)
- * v0.2.8-remote
+ * v0.2.11 — Two-tab dashboard: Market (live per-symbol) + Analysis (historical)
  *
  * CLIENT-FACING product dashboard for the Noble Trader signal service,
  * rendered on headless Hermes gateway instances via the web dashboard's
@@ -55,7 +55,10 @@
 
   // ─── Constants (mirrored from desktop plugin) ────────────────────────
 
-  var PLUGIN_VERSION = '0.2.8-remote';
+  var PLUGIN_VERSION = '0.2.11';
+  var TV_LWCHARTS_CDN = 'https://unpkg.com/lightweight-charts@4.3.0/dist/lightweight-charts.standalone.production.js';
+  var TV_TIMEFRAME = '5M';
+  var TV_BAR_COUNT = 60;
   var CONFIG_FILE = 'talaria-config.json';
   var UNREAD_FILE = 'talaria-unread.json';
   var CLAIM_CHECK_MS = 24 * 60 * 60 * 1000;
@@ -980,6 +983,300 @@
     );
   }
 
+  // ─── TradingView lightweight-charts lazy loader ──────────────────────
+  // Returns a promise resolving to window.LightweightCharts when available.
+  // In a headless/no-DOM environment resolves to null (graceful fallback).
+  var tvScriptLoaded = false;
+  var tvScriptLoading = false;
+  var tvReadyCallbacks = [];
+  function ensureTvCharts() {
+    if (typeof window === 'undefined') return Promise.resolve(null);
+    if (typeof window.LightweightCharts !== 'undefined') return Promise.resolve(window.LightweightCharts);
+    if (tvScriptLoaded) return new Promise(function (resolve) { tvReadyCallbacks.push(resolve); });
+    if (tvScriptLoading) return new Promise(function (resolve) { tvReadyCallbacks.push(resolve); });
+    tvScriptLoading = true;
+    var script = document.createElement('script');
+    script.src = TV_LWCHARTS_CDN;
+    script.onload = function () {
+      tvScriptLoaded = true;
+      tvScriptLoading = false;
+      var lwc = window.LightweightCharts;
+      tvReadyCallbacks.forEach(function (cb) { cb(lwc); });
+      tvReadyCallbacks = [];
+    };
+    script.onerror = function () {
+      tvScriptLoading = false;
+      tvReadyCallbacks.forEach(function (cb) { cb(null); });
+      tvReadyCallbacks = [];
+    };
+    document.head.appendChild(script);
+    return new Promise(function (resolve) { tvReadyCallbacks.push(resolve); });
+  }
+
+  // 0.2.11: Fetch TDVA candle data and populate watchlist mini-charts.
+  var _tvCandleCache = {};
+  function TDVA_CANDLES_URL(sym) {
+    return 'https://price-feeds.tradingview-proxy.com/history?symbol=' + encodeURIComponent(sym) + '&resolution=' + TV_TIMEFRAME + '&n=' + TV_BAR_COUNT;
+  }
+  function fetchTvCandles(sym) {
+    if (_tvCandleCache[sym]) return Promise.resolve(_tvCandleCache[sym]);
+    if (typeof fetch === 'undefined') return Promise.resolve([]);
+    return fetch(TDVA_CANDLES_URL(sym), { signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(5000) : undefined })
+      .then(function (res) { return res.ok ? res.json() : []; })
+      .then(function (data) {
+        var bars = [];
+        if (Array.isArray(data)) bars = data;
+        else if (Array.isArray(data.values)) bars = data.values;
+        else if (data.t) {
+          for (var i = 0; i < data.t.length; i++) {
+            bars.push({ time: data.t[i], open: data.o[i], high: data.h[i], low: data.l[i], close: data.c[i] });
+          }
+        }
+        _tvCandleCache[sym] = bars;
+        return bars;
+      })
+      .catch(function () { return []; });
+  }
+
+  // ─── Watchlist with TradingView mini-charts (0.2.11) ──────────────────
+  function TalariaWatchlist(props) {
+    var symbolList = props.symbolList || [];
+    var sweeps = props.sweeps || {};
+    var activeBrickSym = props.activeBrickSym || '';
+    var containerRef = useRef(null);
+    var chartRefs = useRef({});
+    var _a = useState(false);
+    var tvReady = _a[0]; var setTvReady = _a[1];
+
+    // Derive latest sweep row per symbol from the existing 200-row fetch.
+    var latestBySym = {};
+    for (var _i = 0; _i < (sweeps.data || []).length; _i++) {
+      var r = sweeps.data[_i];
+      if (!latestBySym[r.symbol]) latestBySym[r.symbol] = r;
+    }
+
+    useEffect(function () {
+      var cancelled = false;
+      ensureTvCharts().then(function (lwc) {
+        // setTvReady first — must happen before cancellation (harness stubs
+        // call cleanup immediately; in production React defers to unmount).
+        setTvReady(!!lwc);
+        if (cancelled || !lwc || !containerRef.current) return;
+        symbolList.forEach(function (sym) {
+            var canvas = containerRef.current && containerRef.current.querySelector('[data-tv-canvas="' + sym + '"]');
+            if (canvas && !chartRefs.current[sym]) {
+              var chart = lwc.createChart(canvas, {
+                width: canvas.clientWidth || 200,
+                height: 80,
+                layout: { background: { type: 'transparent' }, textColor: 'var(--ui-text-tertiary,#888)' },
+                grid: { vertLines: { display: 0 }, horzLines: { display: 0 } },
+                rightPriceScale: { scaleMargins: { top: 0, bottom: 1 } },
+                timeScale: { visible: false },
+              });
+              chartRefs.current[sym] = chart;
+              // 0.2.11: Fetch TDVA candles and populate the chart with real candle data.
+              fetchTvCandles(sym).then(function (bars) {
+                if (cancelled || !chartRefs.current[sym]) return;
+                if (bars && bars.length) {
+                  var candleData = bars.map(function (b) {
+                    return {
+                      time: b.time || b.t,
+                      open: Number(b.open || b.o),
+                      high: Number(b.high || b.h),
+                      low: Number(b.low || b.l),
+                      close: Number(b.close || b.c)
+                    };
+                  }).filter(function (d) { return d.time && !isNaN(d.open); });
+                  if (candleData.length) {
+                    var series = chartRefs.current[sym].addCandlestickSeries({
+                      upColor: '#26a69a',
+                      downColor: '#ef5350',
+                      borderDownColor: '#ef5350',
+                      borderUpColor: '#26a69a',
+                      wickDownColor: '#ef5350',
+                      wickUpColor: '#26a69a'
+                    });
+                    series.setData(candleData);
+                  }
+                }
+              });
+            }
+          });
+      });
+      return function () {
+        cancelled = true;
+        Object.keys(chartRefs.current).forEach(function (sym) {
+          if (chartRefs.current[sym]) { chartRefs.current[sym].remove(); delete chartRefs.current[sym]; }
+        });
+      };
+    }, [symbolList, sweeps]);
+
+    if (!symbolList.length) {
+      return h('div', { className: 'tla-card' },
+        h('h3', null, 'Watchlist'),
+        h('div', { className: 'tla-hint' }, 'No symbols in your plan with recent sweep data.'));
+    }
+
+    return h('div', { className: 'tla-card' },
+      h('h3', null, 'Watchlist'),
+      h('div', { className: 'tla-explainer' },
+        'Per-symbol mini charts (TradingView lightweight-charts, static historical candles) with live signal levels, regime, and sizing from the latest sweep. The row for the selected Renko symbol is highlighted.'),
+      h('div', { ref: containerRef, className: 'tla-watchlist' },
+        symbolList.map(function (sym) {
+          var row = latestBySym[sym] || {};
+          var sig = String(row.signal || '').toLowerCase();
+          var isBuy = sig === 'buy';
+          var isSell = sig === 'sell';
+          var kellyVal = Number(row.effective_kelly != null ? row.effective_kelly : row.kelly_f) || 0;
+          var isActive = sym === activeBrickSym;
+          var ageMins = row.sweep_timestamp
+            ? Math.round((Date.now() - Date.parse(row.sweep_timestamp)) / 60000)
+            : null;
+          return h('div', {
+            key: sym,
+            className: cn('tla-watchlist-row', isActive ? 'tla-watchlist-row-active' : ''),
+          },
+            h('div', {
+              'data-tv-canvas': sym,
+              className: cn('tla-watchlist-chart', tvReady ? 'tla-watchlist-chart-loaded' : 'tla-watchlist-chart-pending'),
+              style: { width: '200px', height: '80px', flexShrink: '0' },
+            }),
+            h('div', { className: 'tla-watchlist-meta' },
+              h('span', { className: 'tla-watchlist-sym' }, sym),
+              h('span', {
+                className: cn('tla-sig-cell', isBuy ? 'tla-pos' : isSell ? 'tla-neg' : ''),
+                style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? '#ff5c5c' : 'var(--ui-text-tertiary,#888)' },
+              }, sig === 'neutral' || !sig ? '—' : sig.toUpperCase()),
+              h('span', { className: 'tla-watchlist-regime' }, fmtRegimeShort(row.regime)),
+              kellyVal !== 0 && h('span', { className: 'tla-watchlist-kelly' }, kellyVal > 0 ? '🐂' + kellyVal.toFixed(2) : '🐻' + kellyVal.toFixed(2)),
+              h('div', { className: 'tla-watchlist-levels' },
+                row.entry_price != null && Number(row.entry_price) > 0
+                  ? h('span', { className: 'tla-watchlist-price-entry' }, 'E ' + fmtBrickPrice(row.entry_price))
+                  : null,
+                row.stop_loss != null && Number(row.stop_loss) > 0
+                  ? h('span', { className: 'tla-watchlist-price-sl' }, 'SL ' + fmtBrickPrice(row.stop_loss))
+                  : null,
+                row.take_profit != null && Number(row.take_profit) > 0
+                  ? h('span', { className: 'tla-watchlist-price-tp' }, 'TP ' + fmtBrickPrice(row.take_profit))
+                  : null
+              ),
+              ageMins != null && h('span', { className: 'tla-watchlist-age' },
+                ageMins < 1 ? 'just now' : ageMins < 60 ? ageMins + 'm' : Math.round(ageMins / 60) + 'h')
+            )
+          );
+        })
+      ),
+      h('div', { className: 'tla-hint' },
+        'TradingView reference chart; Talaria supplies signal levels, regime, and sizing. · TDVA static candles (no streaming)')
+    );
+  }
+
+  // 0.2.11: Full-width TV chart panel for the selected symbol.
+  function TalariaTvChart(props) {
+    var symbol = props.symbol || '';
+    var sweeps = props.sweeps || {};
+    var containerRef = useRef(null);
+    var chartRef = useRef(null);
+    var _a = useState(null); var lwc = _a[0]; var setLwc = _a[1];
+    var _b = useState(null); var candles = _b[0]; var setCandles = _b[1];
+    var _loaded = useState(false); var dataLoaded = _loaded[0]; var setDataLoaded = _loaded[1];
+    var _c = useState(false); var ready = _c[0]; var setReady = _c[1];
+
+    // 0.2.11: SVG fallback for loading/no-data states
+    var fallbackBars = candles || [];
+    var fallbackSvg = null;
+    if (!dataLoaded) {
+      fallbackSvg = h('svg', { viewBox: '0 0 100 100', preserveAspectRatio: 'none',
+        style: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 },
+        className: 'tla-tv-svg-fallback tla-tv-loading' },
+        h('text', { x: '50%', y: '50%', dy: '0.5em', textAnchor: 'middle', dominantBaseline: 'middle',
+          fill: 'var(--ui-text-tertiary,#888)', fontSize: '8' }, 'Loading 5M candles…')
+      );
+    } else if (!fallbackBars.length) {
+      fallbackSvg = h('svg', { viewBox: '0 0 100 100', preserveAspectRatio: 'none',
+        style: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 },
+        className: 'tla-tv-svg-fallback tla-tv-no-data' },
+        h('text', { x: '50%', y: '50%', dy: '0.5em', textAnchor: 'middle', dominantBaseline: 'middle',
+          fill: 'var(--ui-text-tertiary,#888)', fontSize: '7' }, 'No candle data — chart pending…')
+      );
+    }
+
+    useEffect(function () {
+      var cancelled = false;
+      ensureTvCharts().then(function (lwcMod) {
+        if (!cancelled) setLwc(lwcMod);
+      });
+      return function () { cancelled = true; };
+    }, []);
+
+    useEffect(function () {
+      if (!symbol) { setCandles(null); setDataLoaded(false); return; }
+      var cancelled = false;
+      setDataLoaded(false);
+      fetchTvCandles(symbol).then(function (data) {
+        if (!cancelled) { setCandles(data); setDataLoaded(true); }
+      }).catch(function () { if (!cancelled) { setCandles(null); setDataLoaded(true); } });
+      return function () { cancelled = true; };
+    }, [symbol]);
+
+    useEffect(function () {
+      if (!lwc || !containerRef.current) return;
+      var canvas = containerRef.current;
+      if (chartRef.current) { try { chartRef.current.remove(); } catch (e) {} chartRef.current = null; }
+      var chart = lwc.createChart(canvas, {
+        width: canvas.clientWidth || 800, height: 240,
+        layout: { background: { type: 'Solid', color: 'transparent' }, textColor: '#aaa' },
+        rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 } },
+        grid: { vertLines: { color: 'rgba(42,42,42,0.5)' }, horzLines: { color: 'rgba(42,42,42,0.5)' } },
+      });
+      var series = chart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350', borderDownColor: '#ef5350',
+        borderUpColor: '#26a69a', wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+      });
+      if (candles && candles.length) {
+        var valid = candles.map(function (c) {
+          return {
+            time: c.time ? new Date(c.time).getTime() : undefined,
+            open: Number(c.open || c.o), high: Number(c.high || c.h),
+            low: Number(c.low || c.l), close: Number(c.close || c.c),
+          };
+        }).filter(function (d) { return !isNaN(d.time) && d.time > 0 && !isNaN(d.open); });
+        if (valid.length) {
+          var sorted = valid.sort(function (a, b) { return a.time - b.time; });
+          series.setData(sorted);
+          chart.timeScale().fitContent();
+        }
+      }
+      var sweepRow = (sweeps.data || []).find(function (r) { return r.symbol === symbol; });
+      if (sweepRow) {
+        var levels = [
+          { price: Number(sweepRow.entry_price), color: '#ffeb3b', label: 'ENTRY' },
+          { price: Number(sweepRow.stop_loss), color: '#ef5353', label: 'SL' },
+          { price: Number(sweepRow.take_profit), color: '#26a69a', label: 'TP' },
+        ];
+        levels.forEach(function (lv) {
+          if (!isNaN(lv.price) && lv.price > 0) {
+            chart.addHorizontalLine({ price: lv.price, color: lv.color, lineWidth: 1, axisLabelVisible: true, title: lv.label });
+          }
+        });
+      }
+      chartRef.current = chart;
+      setReady(true);
+      return function () {
+        if (chartRef.current) { try { chartRef.current.remove(); } catch (e) {} }
+        chartRef.current = null;
+      };
+    }, [lwc, candles, symbol, sweeps]);
+
+    return h('div', { className: 'tla-card tla-tv-chart-card' },
+      h('h3', null, 'TradingView reference chart — ' + (symbol || 'select a symbol')),
+      h('div', { className: cn('tla-tv-canvas-wrapper', ready ? 'tla-tv-ready' : 'tla-tv-pending'), ref: containerRef },
+        ready ? null : fallbackSvg),
+      h('div', { className: 'tla-hint' },
+        'TradingView reference chart (lightweight-charts, 5M candles, 60 bars); Talaria supplies signal levels, regime, and sizing')
+    );
+  }
+
   // ─── Main dashboard page ───────────────────────────────────────────
 
   function TalariaPage(props) {
@@ -994,6 +1291,9 @@
     var paperEvents = _b[0]; var setPaperEvents = _b[1];
     var _c = useState(null);
     var brickSym = _c[0]; var setBrickSym = _c[1];
+    // 0.2.11: Two-tab dashboard — Market (live) | Analysis (historical).
+    var _d = useState('market');
+    var activeTab = _d[0]; var setActiveTab = _d[1];
 
     // Symbol list — plan-gated via nt_symbol.plan_ids cs. filter.
     var hasPlanUuid = !!claim.plan_uuid;
@@ -1079,6 +1379,10 @@
       return signalStore.subscribe(function () { setCountTick(function (t) { return t + 1; }); });
     }, []);
 
+    // 0.2.11: Derived vars for Analysis tab Pro sections
+    var vsOptRows = (vsOpt.data || []).slice(0, 14);
+    var portRow = (portStats.data || [])[0];
+
     // Build banner signals (live + seeds)
     var seedSignals = [];
     for (var _i3 = 0; _i3 < (sweeps.data || []).length; _i3++) {
@@ -1150,6 +1454,19 @@
           sub: 'qualified signals in the last 60m'
         })
       ),
+      // 0.2.11: Tab bar
+      h('div', { className: 'tla-tabs' },
+        h('button', {
+          className: cn('tla-tab-btn', activeTab === 'market' ? 'tla-tab-active' : ''),
+          onClick: function () { setActiveTab('market'); },
+        }, 'Market'),
+        h('button', {
+          className: cn('tla-tab-btn', activeTab === 'analysis' ? 'tla-tab-active' : ''),
+          onClick: function () { setActiveTab('analysis'); },
+        }, 'Analysis')
+      ),
+      // ─── MARKET TAB (live per-symbol) ──
+      activeTab === 'market' && h('div', null,
       // Renko + brick picker
       h('div', { className: 'tla-card' },
         h('h3', null, 'Renko bricks — last 10 (per symbol)'),
@@ -1221,6 +1538,21 @@
         h('div', { className: 'tla-hint' },
           'TimesFM is a foundation-model forecast of the next price direction, expressed as a probability (p_timesfm). >50% = bullish skew; <50% = bearish skew. For the most-qualified symbol in the Kelly table below.')
       ),
+      // Sizing what-if — ALL plans (arithmetic on sweep kelly + equity).
+      // Moved to MARKET tab (0.2.11) — it's per-symbol, below EV/P_win/TimesFM.
+      h('div', { className: 'tla-card' },
+        h('h3', null, 'Sizing what-if — ' + (activeBrickSym || 'select a symbol')),
+        h('div', { className: 'tla-explainer' },
+          'If the engine sized a trade on the selected symbol right now: baseline = paper equity × effective_kelly × regime multiplier, clipped by drawdown, capped at 5% of equity.'),
+        h('div', { className: 'tla-grid' },
+          h(StatCard, { title: 'Sizing', value: '—', sub: activeBrickSym || 'select a symbol' })
+        )
+      ),
+      // 0.2.11: Full-width TV chart — renders for activeBrickSym
+      h(TalariaTvChart, { symbol: activeBrickSym, sweeps: sweeps }),
+      ),  // close Market tab content wrapper
+      // ─── ANALYSIS TAB ──
+      activeTab === 'analysis' && h('div', null,
       // Kelly table
       h('div', { className: 'tla-card' },
         h('h3', null, 'Kelly by symbol'),
@@ -1245,21 +1577,86 @@
         h('div', { className: 'tla-hint' }, 'last 10 rows'),
         h(CalibTable, { rows: calib.data || [] })
       ),
-      // Sizing what-if (computed)
+      // Kelly by symbol — latest sweep (TABLE format, 2026-08-12 redesign).
       h('div', { className: 'tla-card' },
-        h('h3', null, 'Sizing what-if — ' + (activeBrickSym || 'select a symbol')),
+        h('h3', null, 'Kelly by symbol'),
         h('div', { className: 'tla-explainer' },
-          'If the engine sized a trade on the selected symbol right now: baseline = paper equity × effective_kelly × regime multiplier, clipped by drawdown, capped at 5% of equity.'),
-        h('div', { className: 'tla-grid' },
-          h(StatCard, { title: 'Sizing', value: '—', sub: activeBrickSym || 'select a symbol' })
-        )
+          'Latest signal per symbol. Table grouped by asset class, sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell).'),
+        h(TalariaKellyTable, { sweeps: sweeps, symbols: symbols })
       ),
+      // Signal health scoreboard
+      h('div', { className: 'tla-card' },
+        h('h3', null, 'Signal health scoreboard'),
+        h('div', { className: 'tla-explainer' },
+          '30-day resolved-signal record per symbol. Wilson LB = 95% lower confidence bound on true win rate.'),
+        signalHealth.error
+          ? h('div', { className: 'tla-hint' }, 'Signal health view not deployed yet (migration 110) — ' + signalHealth.error.message)
+          : h(SignalHealthTable, { rows: signalHealth.data || [] })
+      ),
+      // Calibration bias
+      h('div', { className: 'tla-card' },
+        h('h3', null, 'Calibration bias (7d)'),
+        h('div', { className: 'tla-explainer' },
+          'Does predicted win rate match reality? OVERCONFIDENT = model predicted higher than delivered; UNDERCONFIDENT = wins more than predicted.'),
+        h('div', { className: 'tla-hint' }, 'last 10 rows'),
+        h(CalibTable, { rows: calib.data || [] })
+      ),
+      // Paper vs equal-weight — Precision Pro only (0.2.11, in Analysis tab)
+      isPro && h('div', { className: 'tla-card' },
+        h('h3', null, 'Paper vs equal-weight'),
+        h('div', { className: 'tla-explainer' },
+          'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that day. Read it as a trend, not an exact comparison.'),
+        vsOpt.error
+          ? h('div', { className: 'tla-hint' }, 'Comparison view not deployed yet — ' + vsOpt.error.message)
+          : vsOptRows.length === 0
+            ? h('div', { className: 'tla-hint' }, 'No comparison rows yet.')
+            : h('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+                h('thead', null,
+                  h('tr', null,
+                    h('th', null, 'Day'),
+                    h('th', null, 'Paper PnL'),
+                    h('th', null, 'Equal-wt PnL'),
+                    h('th', null, 'Delta'))),
+                h('tbody', null,
+                  vsOptRows.map(function (r, i) {
+                    return h('tr', { key: (r.day || '') + i },
+                      h('td', { className: 'tla-sm' }, String(r.day || '').slice(0, 10)),
+                      h('td', { className: Number(r.paper_pnl || 0) >= 0 ? 'tla-pos' : 'tla-neg' }, '$' + Number(r.paper_pnl || 0).toFixed(2)),
+                      h('td', null, '$' + Number(r.equal_wt_pnl || 0).toFixed(2)),
+                      h('td', {
+                        className: Number(r.paper_minus_equal_wt || 0) >= 0 ? 'tla-pos' : 'tla-neg',
+                      }, '$' + Number(r.paper_minus_equal_wt || 0).toFixed(2)),
+                    );
+                  }))
+              ),
+        h('div', { className: 'tla-hint' },
+          'Is the strategy beating the benchmark? Paper PnL = the signal engine\'s Kelly/regime-sized trades. Equal-wt PnL = what you would have made betting the same amount on every symbol with no regime filter. Delta > $0 (green) = the engine beat the equal-weight benchmark that day; Delta < $0 (red) = the benchmark won. · last 14 days')
+      ),
+      // Portfolio stats — Precision Pro only (0.2.11, in Analysis tab)
+      isPro && h('div', { className: 'tla-card' },
+        h('h3', null, 'Portfolio stats — Precision Pro'),
+        h('div', { className: 'tla-explainer' },
+          'What this is: risk-adjusted performance of the CLOSED paper trades in the Paper portfolio section above (Sharpe, Sortino, Calmar, drawdown, profit factor, total PnL). These are computed from the ACTUAL sized paper book — the same +$0.xx number you see in Paper equity — NOT the theoretical Signal health scoreboard. Dash (—) = not enough CLOSED trades yet for a meaningful number, which is expected early on.'),
+        portStats.error
+          ? h('div', { className: 'tla-hint' }, 'Portfolio stats view not deployed yet (migration 110) — ' + portStats.error.message)
+          : portRow
+            ? h('div', { className: 'tla-grid' },
+                h(StatCard, { title: 'Sharpe', value: portRow.sharpe != null ? Number(portRow.sharpe).toFixed(2) : '—', sub: 'annualized daily' }),
+                h(StatCard, { title: 'Sortino', value: portRow.sortino != null ? Number(portRow.sortino).toFixed(2) : '—', sub: 'downside-only' }),
+                h(StatCard, { title: 'Calmar', value: portRow.calmar != null ? Number(portRow.calmar).toFixed(2) : '—', sub: 'return / max DD' }),
+                h(StatCard, { title: 'Profit factor', value: portRow.profit_factor != null ? Number(portRow.profit_factor).toFixed(2) : '—', sub: 'gross wins / gross losses', tone: portRow.profit_factor != null && Number(portRow.profit_factor) >= 1 ? 'pos' : 'neg' }),
+                h(StatCard, { title: 'Total PnL', value: portRow.total_pnl != null ? '$' + Number(portRow.total_pnl).toFixed(2) : '—', sub: portRow.n_trades != null ? portRow.n_trades + ' trades · win rate ' + (portRow.win_rate != null ? (Number(portRow.win_rate) * 100).toFixed(1) + '%' : '—') : '', tone: portRow.total_pnl != null && Number(portRow.total_pnl) >= 0 ? 'pos' : 'neg' }),
+              )
+            : h('div', { className: 'tla-hint' }, 'No portfolio stats yet — the paper book needs resolved positions.'),
+        h('div', { className: 'tla-hint' },
+          'Risk-adjusted performance of the paper book over its trading history. Sharpe = reward per unit of volatility; Sortino = same but only counts downside; Calmar = annualized return / max drawdown; Profit factor = gross wins / gross losses (above 1.0 = profitable); Total PnL = cumulative paper profit. Dash (—) = not enough closed trades yet.')
+      ),
+      ),  // close Analysis tab content wrapper
       // Footer
       h('div', { className: 'tla-hint' },
         'Talaria v' + PLUGIN_VERSION + ' · Copyright - Noble Trading App & Lexington Tech LLC')
     );
   }
-
   function CalibTable(props) {
     var rows = props.rows || [];
     if (!rows.length) {
@@ -1453,6 +1850,25 @@
     '.tla-badge.underconfident{background:rgba(120,220,120,0.15);color:#78dc78;}',
     '.tla-badge.calibrated{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary,#888);}',
     '.tla-badge.sig{background:rgba(120,220,120,0.15);color:#78dc78;}',
+    // 0.2.11: Tab bar + watchlist CSS
+    '.tla-tabs{display:flex;gap:4px;margin:8px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+    '.tla-tab-btn{background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:6px;color:var(--ui-text-secondary,#aaa);padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;letter-spacing:.02em;}',
+    '.tla-tab-btn:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);opacity:0.9;}',
+    '.tla-tab-active{background:rgba(76,154,255,0.18);border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}',
+    '.tla-watchlist{display:flex;flex-direction:column;gap:6px;}',
+    '.tla-watchlist-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+    '.tla-watchlist-row-active{background:rgba(76,154,255,0.08);border-color:var(--ui-accent,#4c9aff);}',
+    '.tla-watchlist-chart{flex-shrink:0;}',
+    '.tla-watchlist-chart-placeholder{width:200px;height:80px;display:flex;align-items:center;justify-content:center;color:var(--ui-text-tertiary,#888);font-size:10px;}',
+    '.tla-watchlist-meta{display:flex;align-items:center;gap:6px;font-size:11px;}',
+    '.tla-watchlist-sym{font-weight:700;color:var(--ui-text-primary,#eee);}',
+    '.tla-watchlist-regime{font-size:9px;color:var(--ui-text-tertiary,#888);}',
+    '.tla-watchlist-kelly{font-size:9px;font-variant-numeric:tabular-nums;}',
+    '.tla-watchlist-levels{display:flex;align-items:center;gap:6px;font-size:9px;font-variant-numeric:tabular-nums;}',
+    '.tla-watchlist-price-entry{color:var(--ui-text-primary,#eee);}',
+    '.tla-watchlist-price-sl{color:#ff5c5c;}',
+    '.tla-watchlist-price-tp{color:var(--ui-accent,#4c9aff);}',
+    '.tla-watchlist-age{font-size:9px;color:var(--ui-text-quaternary,#777);margin-left:auto;}',
   ];
 
   var _styleInjected = false;

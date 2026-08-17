@@ -44,6 +44,16 @@ globalThis.WebSocket = class WebSocketStub {
   constructor(url) { this.url = url }
   close() {}
 }
+// 0.2.11: window + LightweightCharts stub for watchlist mini-charts
+globalThis.window = {
+  LightweightCharts: {
+    createChart: () => ({
+      addCandlestickSeries: () => ({ setData: () => {} }),
+      remove: () => {},
+    }),
+  },
+}
+globalThis.AbortSignal = { timeout: () => undefined }
 // Stub setInterval to prevent the plugin's polling intervals
 // (startSignalPolling, useSupabaseData) from keeping the Node event loop
 // alive after the harness exits. setTimeout is left intact for microtask
@@ -121,6 +131,18 @@ globalThis.fetch = async (url) => {
       })
     }
     return jsonResp(bricks)
+  }
+  // 0.2.11: TDVA candle data stub for watchlist mini-charts
+  if (u.includes('price-feeds.tradingview-proxy.com/history')) {
+    const m = u.match(/symbol=([A-Z0-9]+)/)
+    const sym = m ? m[1] : 'XAUUSD'
+    const basePrice = sym.startsWith('XA') ? 2330 : sym.startsWith('BT') ? 60000 : 1.085
+    const bars = []
+    for (let i = 0; i < 60; i++) {
+      const o = basePrice + i * 0.3
+      bars.push({ time: i, open: o, high: o + 2, low: o - 1, close: o + (i % 2 ? 1 : -1) })
+    }
+    return jsonResp(bars)
   }
   throw new Error('Unexpected fetch URL: ' + u)
 }
@@ -315,6 +337,7 @@ if (tree) {
 
   const hasText = (t) => acc.texts.some((x) => x.includes(t))
   const hasEmoji = (emoji) => acc.texts.some((x) => x.includes(emoji))
+  const hasClass = (c) => acc.classes.some((x) => x.includes(c))
 
   assert(hasText('Renko bricks'), 'renko bricks card renders')
   assert(hasText('EV / P_win / TimesFM'), 'EV / P_win / TimesFM standalone panel renders (below Markov + pattern)')
@@ -327,10 +350,38 @@ if (tree) {
   assert(hasText('+60.0%'), 'P_win value renders for most-qualified symbol')
   // XAUUSD is the most-qualified symbol with p_timesfm=0.58 → bullish forecast
   assert(hasEmoji('\ud83d\udcc8'), 'TimesFM card shows bullish forecast for qualified XAUUSD')
-  assert(hasText('Kelly by symbol'), 'Kelly by symbol table renders (below TimesFM)')
-  assert(hasText('Signal health'), 'signal health scoreboard renders')
-  assert(hasText('Calibration bias'), 'calibration bias card renders')
-  assert(hasText('Sizing what-if'), 'sizing what-if card renders')
+  assert(hasText('Sizing what-if'), 'sizing what-if card renders (Market tab)')
+  // 0.2.11: Two-tab dashboard — Analysis tab content verified at source level below
+  assert(hasText('Market'), 'Market tab label renders')
+  assert(hasText('Analysis'), 'Analysis tab label renders')
+  assert(hasClass('tla-tabs'), 'tab bar renders')
+  assert(hasClass('tla-tab-btn'), 'tab buttons render')
+  // Market tab content visible by default
+  assert(hasText('Renko bricks'), 'Market tab: Renko bricks card renders')
+  assert(hasText('Markov + pattern'), 'Market tab: Markov card renders')
+  assert(hasText('EV / P_win / TimesFM'), 'Market tab: EV/P_win/TimesFM panel renders')
+  assert(!hasText('Watchlist'), 'Market tab: Watchlist NOT rendered (removed by user preference)')
+  // Analysis tab content present in source (renders when activeTab='analysis')
+  const dashboardSrc = fs.readFileSync(PLUGIN_SRC, 'utf8')
+  assert(dashboardSrc.includes("activeTab === 'analysis'"), 'Analysis tab conditional exists in source')
+  assert(dashboardSrc.includes("activeTab === 'market'"), 'Market tab conditional exists in source')
+  assert(dashboardSrc.includes('TalariaWatchlist'), 'TalariaWatchlist component defined in source (not mounted)')
+  assert(dashboardSrc.includes('TalariaTvChart'), 'TalariaTvChart component defined in source')
+  assert(dashboardSrc.includes('tla-tv-chart-card'), 'TV chart card CSS class defined in source')
+  assert(dashboardSrc.includes('ensureTvCharts'), 'ensureTvCharts (TDVA loader) defined')
+  assert(dashboardSrc.includes('TV_LWCHARTS_CDN'), 'TV_LWCHARTS_CDN constant defined')
+  assert(dashboardSrc.includes('lightweight-charts'), 'TradingView lightweight-charts CDN URL present')
+  assert(dashboardSrc.includes('tla-tv-loading'), 'TV chart loading SVG fallback renders')
+  assert(dashboardSrc.includes('Sizing what-if'), 'Sizing what-if is in Market tab (source)')
+  assert(dashboardSrc.includes('Kelly by symbol'), 'Kelly table is in Analysis tab (source)')
+  assert(dashboardSrc.includes('Signal health scoreboard'), 'Signal health is in Analysis tab (source)')
+  assert(dashboardSrc.includes('Calibration bias'), 'Calibration bias is in Analysis tab (source)')
+  assert(dashboardSrc.includes('Paper vs equal-weight'), 'Paper vs equal-weight is in Analysis tab (source)')
+  assert(dashboardSrc.includes('Portfolio stats'), 'Portfolio stats is in Analysis tab (source)')
+  assert(dashboardSrc.includes('fetchTvCandles'), 'watchlist fetches TDVA candle data (source)')
+  assert(dashboardSrc.includes('addCandlestickSeries'), 'watchlist populates charts with candle series (source)')
+  assert(dashboardSrc.includes('setData'), 'watchlist sets candle data on chart series (source)')
+  assert(dashboardSrc.includes("'0.2.11'"), 'dashboard PLUGIN_VERSION is v0.2.11')
 }
 
 console.log('')
