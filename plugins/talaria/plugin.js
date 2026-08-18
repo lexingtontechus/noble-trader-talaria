@@ -214,6 +214,28 @@ async function claimCheck(config) {
   return json
 }
 
+// Aggregate daily rows into rolling N-month buckets (newest first).
+// Each daily row: { day: 'YYYY-MM-DD', paper_pnl, equal_wt_pnl, paper_minus_equal_wt }
+// Returns: [{ month: 'YYYY-MM', paper_pnl, equal_wt_pnl, delta }, ...] newest-first.
+function aggregateToMonths(dailyRows, months) {
+  if (!dailyRows || !dailyRows.length) return []
+  const groups = {}
+  for (const r of dailyRows) {
+    const d = String(r.day || '').slice(0, 7) // 'YYYY-MM-DD' → 'YYYY-MM'
+    if (!d || d.length < 7) continue
+    if (!groups[d]) groups[d] = { paper: 0, equal: 0 }
+    groups[d].paper += Number(r.paper_pnl || 0)
+    groups[d].equal += Number(r.equal_wt_pnl || 0)
+  }
+  const sorted = Object.keys(groups).sort().reverse().slice(0, months)
+  return sorted.map((m) => ({
+    month: m,
+    paper_pnl: groups[m].paper,
+    equal_wt_pnl: groups[m].equal,
+    delta: groups[m].paper - groups[m].equal,
+  }))
+}
+
 // ---------------------------------------------------------------------------
 // Remote data hook — polls Supabase REST every 60s (the data fallback that
 // keeps the dashboard alive when the Realtime socket is down)
@@ -873,6 +895,19 @@ const signalStore = {
             host.notify({
               id: SIGNAL_TOAST_ID,
               kind: 'info',
+              // FIX (2026-08-17): pin placement to 'default' (top-center) so the
+              // signal toast does NOT overlap the chat composer controls in the
+              // bottom-right corner. The app's defaultPlacement() routes bare
+              // 'info' notifications to 'bottom-right' — overriding here.
+              placement: 'default',
+              // FIX (2026-08-17): when the user manually dismisses the toast
+              // (clicks the X), advance the watermark via markSeen() so the
+              // same signal does NOT re-toast on the next 10s poll tick or
+              // realtime rebroadcast. Without this, dismissed toasts reappear
+              // ~5-10s later because the store watermark was never advanced
+              // (the dismissal only removes the notification from the app's
+              // stack, it doesn't touch signalStore).
+              onDismiss: () => { try { signalStore.markSeen() } catch (e) {} },
               title: 'Talaria signal',
               message: `${sig.symbol} ${dir}${sig.kelly != null ? ' · kelly ' + Number(sig.kelly).toFixed(3) : ''}${entryLabel}`,
               meta: footer,
@@ -1944,7 +1979,7 @@ function TalariaDashboard({ config, claim }) {
     connected)
   // Paper book vs equal-weight baseline — Precision Pro only (migration 106).
   const vsOpt = useSupabaseData(config, 'v_paper_vs_optimized_daily',
-    { select: 'day,paper_pnl,equal_wt_pnl,paper_minus_equal_wt', order: 'day.desc', limit: '14' },
+    { select: 'day,paper_pnl,equal_wt_pnl,paper_minus_equal_wt', order: 'day.desc', limit: '180' },
     connected && isPro)
   // Long brick series (up to 200) for the Markov card — same symbol as the
   // 10-brick chart window, kept as a separate fetch.
@@ -2059,7 +2094,9 @@ function TalariaDashboard({ config, claim }) {
 
     // Calibration + paper-vs-optimized rows (already day.desc ordered).
     const calibRows = calib.data || []
-    const vsOptRows = vsOpt.data || []
+    // Aggregate daily comparison rows into rolling 6-month buckets for the
+    // table (same method as the admin plugin — shared data UX).
+    const vsOptRows = aggregateToMonths(vsOpt.data || [], 6)
 
     // Sizing what-if — follows the SELECTED renko symbol (Opt 1, 2026-08-08):
     // kelly + regime come from that symbol's newest sweep row, NOT the
@@ -2342,7 +2379,7 @@ function TalariaDashboard({ config, claim }) {
     isPro ? React.createElement('div', { className: 'tla-card' },
       React.createElement('h3', null, 'Paper vs equal-weight'),
       React.createElement('div', { className: 'tla-explainer' },
-        'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that day (realized PnL books on close, signal PnL books on signal date). Read it as a trend, not an exact comparison.'),
+        'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that month (realized PnL books on close, signal PnL books on signal date). Data is grouped into rolling 6-month buckets; read as a trend, not an exact comparison.'),
       vsOpt.error
         ? React.createElement('div', { className: 'tla-hint' }, 'Comparison view not deployed yet — ' + vsOpt.error.message)
         : vsOptRows.length === 0
@@ -2350,25 +2387,25 @@ function TalariaDashboard({ config, claim }) {
           : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
               React.createElement('thead', null,
                 React.createElement('tr', null,
-                  React.createElement('th', null, 'Day'),
+                  React.createElement('th', null, 'Month'),
                   React.createElement('th', null, 'Paper PnL'),
                   React.createElement('th', null, 'Equal-wt PnL'),
                   React.createElement('th', null, 'Delta'))),
               React.createElement('tbody', null,
                 vsOptRows.map((r, i) => (
-                  React.createElement('tr', { key: (r.day || '') + i },
-                    React.createElement('td', { className: 'tla-sm' }, String(r.day || '').slice(0, 10)),
+                  React.createElement('tr', { key: (r.month || '') + i },
+                    React.createElement('td', { className: 'tla-sm' }, r.month || '—'),
                     React.createElement('td', { className: Number(r.paper_pnl || 0) >= 0 ? 'tla-pos' : 'tla-neg' }, `$${Number(r.paper_pnl || 0).toFixed(2)}`),
                     React.createElement('td', null, `$${Number(r.equal_wt_pnl || 0).toFixed(2)}`),
                     React.createElement('td', {
-                      className: Number(r.paper_minus_equal_wt || 0) >= 0 ? 'tla-pos' : 'tla-neg',
-                    }, `$${Number(r.paper_minus_equal_wt || 0).toFixed(2)}`),
+                      className: Number(r.delta || 0) >= 0 ? 'tla-pos' : 'tla-neg',
+                    }, `$${Number(r.delta || 0).toFixed(2)}`),
                   )
                 )),
               ),
             ),
       React.createElement('div', { className: 'tla-hint' },
-        'Is the strategy beating the benchmark? Paper PnL = the signal engine\'s Kelly/regime-sized trades. Equal-wt PnL = what you would have made betting the same amount on every symbol with no regime filter. Delta > $0 (green) = the engine beat the equal-weight benchmark that day; Delta < $0 (red) = the benchmark won. · last 14 days'),
+        'Is the strategy beating the benchmark? Paper PnL = the signal engine\'s Kelly/regime-sized trades. Equal-wt PnL = what you would have made betting the same amount on every symbol with no regime filter. Delta > $0 (green) = the engine beat the equal-weight benchmark that month; Delta < $0 (red) = the benchmark won. · rolling 6 months'),
     ) : null,
 
     React.createElement('div', { className: 'tla-hint' },
