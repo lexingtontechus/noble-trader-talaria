@@ -53,7 +53,7 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 //        widget showed stale). Poll now feeds oldest→newest (reverse) so the
 //        newest survives at recent[0]; addSignal always _emit()s so the pane
 //        re-renders even on re-seen (ts <= watermark) rows.
-const PLUGIN_VERSION = '0.2.10'
+const PLUGIN_VERSION = '0.2.11'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -742,6 +742,124 @@ const TalariaMark = ({ className = 'tla-mark', size = 24, color = '#B8823D' }) =
     React.createElement('path', { d: 'M28 70 L44 50 L38 64 L56 40 L48 58 L68 32 L58 52 L82 18 L70 46 L88 8', fill: 'none', stroke: color, strokeWidth: 11, strokeLinejoin: 'miter', strokeLinecap: 'butt' }),
   )
 
+// 0.2.11: TradingView lightweight-charts constants + helpers for watchlist mini-charts.
+// 0.2.11: TradingView lightweight-charts CDN constant (retained for future use)
+const TV_LWCHARTS_CDN = 'https://unpkg.com/lightweight-charts@4.3.0/dist/lightweight-charts.standalone.production.js'
+const TV_TIMEFRAME_NUM = '5'  // 5-minute charts via TradingView widget
+
+// Map internal symbols to TradingView symbol format for the iframe widget.
+// These mirror the sim_symbols.tradingview_symbol column in the backend.
+const TV_SYMBOL_MAP = {
+  BTCUSD: 'COINBASE:BTCUSD',
+  ETHUSD: 'COINBASE:ETHUSD',
+  SOLUSD: 'COINBASE:SOLUSD',
+  XAUUSD: 'OANDA:XAUUSD',
+  XAUEUR: 'OANDA:XAUEUR',
+  XAUAUD: 'OANDA:XAUAUD',
+  XAGUSD: 'OANDA:XAGUSD',
+  USDJPY: 'OANDA:USDJPY',
+  EURUSD: 'OANDA:EURUSD',
+  GBPUSD: 'OANDA:GBPUSD',
+  AUDUSD: 'OANDA:AUDUSD',
+  USDCAD: 'OANDA:USDCAD',
+  US500: 'FOREXCOM:US500',
+  US30: 'FOREXCOM:US30',
+  US100: 'FOREXCOM:US100',
+  DXY: 'TVC:DXY',
+}
+
+// 0.2.11: Build a TradingView widgetembed iframe URL for the given symbol.
+// Loads 5M candles directly from TradingView's servers (TDVA-equivalent data)
+// without requiring a RapidAPI key in the desktop client.
+function tvWidgetUrl(sym) {
+  const tvSym = TV_SYMBOL_MAP[sym] || `OANDA:${sym}`
+  const params = new URLSearchParams({
+    frameElementId: `hermes-tv-chart-${sym}`,
+    symbol: tvSym,
+    interval: TV_TIMEFRAME_NUM,
+    hidesidetoolbar: '0',
+    symboledit: '0',
+    saveimage: '0',
+    toolbarbg: '0d1623',
+    studies: '[]',
+    theme: 'dark',
+    style: '1',
+    timezone: 'Etc/UTC',
+    withdateranges: '0',
+    hidevolume: '1',
+    locale: 'en',
+  })
+  return `https://s.tradingview.com/widgetembed/?${params.toString()}`
+}
+
+// 0.2.11: Full-width TV chart panel — uses TradingView iframe widget for price data.
+// Loads 5M candles directly from TradingView (TDVA-equivalent) via the widgetembed
+// iframe, with ENTRY/SL/TP overlay hints from sweep data. No external API key needed.
+function TalariaTvChart({ symbol, sweepRow }) {
+  const iframeRef = React.useRef(null)
+  const [loaded, setLoaded] = React.useState(false)
+  const [ready, setReady] = React.useState(false)
+  const [error, setError] = React.useState(false)
+
+  const src = symbol ? tvWidgetUrl(symbol) : ''
+
+  // Reset state when symbol changes
+  React.useEffect(() => {
+    setLoaded(false)
+    setReady(false)
+    setError(false)
+    if (iframeRef.current) {
+      iframeRef.current.src = src || 'about:blank'
+    }
+  }, [symbol])
+
+  // Build TV symbol overlay labels (ENTRY/SL/TP) for hint display
+  const signalLevels = []
+  if (sweepRow) {
+    if (sweepRow.entry_price != null && Number(sweepRow.entry_price) > 0)
+      signalLevels.push({ label: 'ENTRY', price: Number(sweepRow.entry_price) })
+    if (sweepRow.stop_loss != null && Number(sweepRow.stop_loss) > 0)
+      signalLevels.push({ label: 'SL', price: Number(sweepRow.stop_loss) })
+    if (sweepRow.take_profit != null && Number(sweepRow.take_profit) > 0)
+      signalLevels.push({ label: 'TP', price: Number(sweepRow.take_profit) })
+  }
+
+  const levelHint = signalLevels
+    .map((lv) => `${lv.label}: ${lv.price.toFixed(2)}`)
+    .join(' · ') || 'No signal levels'
+
+  const hint = symbol
+    ? `TradingView 5M candles (TDVA-equivalent via widgetembed iframe). Signal levels — ${levelHint}. TradingView loads price data directly from its own servers; no API key required.`
+    : 'Select a symbol in the Renko panel to load the TradingView chart.'
+
+  return React.createElement('div', { className: 'tla-card tla-tv-chart-card' },
+    React.createElement('h3', null, `TradingView reference chart — ${symbol || 'select a symbol'}`),
+    React.createElement('div', {
+      className: cn('tla-tv-canvas-wrapper', loaded ? 'tla-tv-ready' : 'tla-tv-pending'),
+    },
+      symbol
+        ? React.createElement('iframe', {
+            key: symbol,              // force remount when symbol changes (reload iframe)
+            ref: iframeRef,
+            src: src,
+            title: `TradingView 5M chart for ${symbol}`,
+            className: 'tla-tv-iframe',
+            onLoad: () => { setLoaded(true); setReady(true) },
+            onError: () => { setError(true); setLoaded(true) },
+            style: { width: '100%', height: '320px', border: 'none', opacity: ready ? 1 : 0, transition: 'opacity 0.3s' },
+          })
+        : React.createElement('div', {
+            className: 'tla-tv-svg-fallback',
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px' },
+          },
+            React.createElement('span', { className: 'tla-hint', style: { color: 'var(--ui-text-tertiary, #888)', fontSize: '12px' } },
+              'Select a symbol in the Renko panel above — the TradingView chart will load here.')
+          )
+    ),
+    React.createElement('div', { className: 'tla-hint' }, hint)
+  )
+}
+
 const signalStore = {
   watermark: null,     // newest signal ts the user has SEEN (ms epoch)
   newestTs: null,      // newest signal ts observed (ms epoch)
@@ -1088,6 +1206,34 @@ const CSS = [
   '.tla-pane-root .tla-pane-last .tla-pane-ts{width:auto;margin-left:auto;}',
   '.tla-pane-root .tla-pane-price{flex-wrap:nowrap;gap:12px;}',
   '}',
+  // 0.2.11: Tab bar + watchlist mini-charts
+  '.tla-tabs{display:flex;gap:2px;padding:4px 0 8px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  '.tla-tab-btn{background:transparent;border:1px solid transparent;border-radius:6px 6px 0 0;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--ui-text-secondary,#888);}',
+  '.tla-tab-btn:hover{border-color:var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-primary,#eee);}',
+  '.tla-tab-btn.tla-tab-active{background:var(--ui-panel,#161616);border-color:var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-accent,#4c9aff);}',
+  '.tla-watchlist-root{border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;}',
+  '.tla-watchlist-header{padding:6px 10px;font-size:11px;font-weight:600;color:var(--ui-text-tertiary,#888);border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  '.tla-watchlist-rows{display:flex;flex-direction:column;}',
+  '.tla-watchlist-row{display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:11px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}',
+  '.tla-watchlist-cell{font-size:11px;font-variant-numeric:tabular-nums;}',
+  '.tla-watchlist-sym{font-weight:700;color:var(--ui-text-primary,#eee);min-width:70px;}',
+  '.tla-watchlist-dir{min-width:50px;}',
+  '.tla-watchlist-price{min-width:80px;text-align:right;}',
+  '.tla-watchlist-levels{color:var(--ui-text-tertiary,#888);font-size:9px;}',
+  '.tla-watchlist-regime{font-size:9px;font-weight:600;}',
+  '.tla-watchlist-chart{width:140px;height:60px;background:rgba(127,127,127,0.08);border-radius:4px;position:relative;overflow:hidden;}',
+  '.tla-watchlist-chart-pending{background:rgba(127,127,127,0.08);}',
+  '.tla-watchlist-chart-loaded{background:transparent;}',
+  '.tla-watchlist-chart-empty{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--ui-text-tertiary,#888);font-size:10px;}',
+  '.tla-watchlist-svg-chart{display:block;width:100%;height:100%;}',
+  '.tla-watchlist-svg-empty{opacity:0.5;}',
+  '.tla-tv-chart-card{padding:12px 16px;}',
+  '.tla-tv-canvas-wrapper{width:100%;height:320px;position:relative;background:rgba(127,127,127,0.08);border-radius:6px;overflow:hidden;}',
+  '.tla-tv-pending{background:rgba(127,127,127,0.08);}',
+  '.tla-tv-ready{background:transparent;}',
+  '.tla-tv-svg-fallback{position:absolute;top:0;left:0;width:100%;height:100%;}',
+  '.tla-tv-iframe{width:100%;height:240px;border:none;background:rgba(127,127,127,0.08);}',
+  '.tla-watchlist-hint{padding-top:4px;}',
 ].join('')
 
 function ensureStyle() {
@@ -1906,6 +2052,8 @@ function TalariaDashboard({ config, claim }) {
   const [paperEvents, setPaperEvents] = React.useState([])
   const [brickSym, setBrickSym] = React.useState(null)
   const [sigHealthPage, setSigHealthPage] = React.useState(1)
+  // 0.2.11: Two-tab structure — Market (live per-symbol) + Analysis (historical/aggregate).
+  const [activeTab, setActiveTab] = React.useState('market')
 
   // Symbol list — plan-gated via nt_symbol.plan_ids cs. filter (UUID from the
   // server claim response, never client-derived). Intersected with the latest
@@ -2115,6 +2263,7 @@ function TalariaDashboard({ config, claim }) {
     const graceDate = claim.grace_end || claim.period_end || ''
 
   return React.createElement('div', { className: 'tla-root' },
+    // Header + banner (always visible, shared across tabs)
     React.createElement('div', { className: 'tla-header' },
       React.createElement(TalariaMark, { size: 20 }),
       React.createElement('span', null, 'Talaria · Noble Trading App')),
@@ -2146,268 +2295,270 @@ function TalariaDashboard({ config, claim }) {
         sub: 'qualified signals in the last 60m (shared count with widget + chip + toast)',
       }),
     ),
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Renko bricks — last 10 (per symbol)'),
-      React.createElement('div', { className: 'tla-explainer' },
-        'The last 10 renko bricks of the selected symbol (each brick = one fixed price move of brick_size). ENTRY / SL / TP reference lines come from that symbol\'s latest sweep. Switch symbols to re-analyze.'),
-      React.createElement('div', { className: 'tla-brick-picker' },
-        symbolList.map((s) =>
-          React.createElement('button', {
-            key: s,
-            className: cn('tla-brick-btn', 'dui-btn', 'dui-btn-sm', s === activeBrickSym ? 'tla-brick-btn-active' : ''),
-            onClick: () => setBrickSym(s),
-          }, s),
+    // 0.2.11: Tab bar — Market (live per-symbol) | Analysis (historical/aggregate)
+    React.createElement('div', { className: 'tla-tabs' },
+      React.createElement('button', {
+        className: cn('tla-tab-btn', activeTab === 'market' ? 'tla-tab-active' : ''),
+        onClick: () => setActiveTab('market'),
+      }, 'Market'),
+      React.createElement('button', {
+        className: cn('tla-tab-btn', activeTab === 'analysis' ? 'tla-tab-active' : ''),
+        onClick: () => setActiveTab('analysis'),
+      }, 'Analysis'),
+    ),
+    // Market tab — live per-symbol panels
+    activeTab === 'market' && React.createElement(React.Fragment, null,
+      // Renko bricks — last 10 (per symbol)
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'Renko bricks — last 10 (per symbol)'),
+        React.createElement('div', { className: 'tla-explainer' },
+          'The last 10 renko bricks of the selected symbol (each brick = one fixed price move of brick_size). ENTRY / SL / TP reference lines come from that symbol\'s latest sweep. Switch symbols to re-analyze.'),
+        React.createElement('div', { className: 'tla-brick-picker' },
+          symbolList.map((s) =>
+            React.createElement('button', {
+              key: s,
+              className: cn('tla-brick-btn', 'dui-btn', 'dui-btn-sm', s === activeBrickSym ? 'tla-brick-btn-active' : ''),
+              onClick: () => setBrickSym(s),
+            }, s),
+          ),
         ),
+        React.createElement(RenkoBrickChart, { bricks: brickWindow, levels }),
+        React.createElement('div', { className: 'tla-hint' },
+          'ENTRY / SL / TP reference lines from the latest sweep · window = last 10 bricks'),
       ),
-      React.createElement(RenkoBrickChart, { bricks: brickWindow, levels }),
-      React.createElement('div', { className: 'tla-hint' },
-        'ENTRY / SL / TP reference lines from the latest sweep · window = last 10 bricks'),
-    ),
-    // Markov + brick-pattern — ALL plans (client-side light math only). Placed
-    // right below the renko chart because both analyze the SAME selected symbol
-    // (activeBrickSym): pattern = last 10 bricks (short-term shape), Markov =
-    // up to 200 brick closes (longer statistical fit).
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, `Markov + pattern — ${activeBrickSym || 'select a symbol'}`),
-      React.createElement('div', { className: 'tla-explainer' },
-        'Short-term shape + longer statistical odds for the SELECTED symbol. Brick pattern reads the last 10 bricks; Markov P(up in 3) fits a 3-state chain on up to 200 closes.'),
-      React.createElement('div', { className: 'tla-grid' },
-        React.createElement(StatCard, {
-          title: 'Brick pattern',
-          value: pattern || '—',
-          sub: `last ${brickWindow.length} bricks · ${(sweepRow && sweepRow.regime) || 'regime n/a'}`,
-        }),
-        React.createElement(StatCard, {
-          title: 'Markov P(up in 3)',
-          value: markov ? (markov.pUp * 100).toFixed(1) + '%' : '—',
-          sub: markov ? `P(down) ${(markov.pDown * 100).toFixed(1)}% · ${markov.n} bricks` : 'needs ≥10 bricks',
-          tone: markov && markov.pUp > 0.5 ? 'pos' : markov && markov.pUp < 0.5 ? 'neg' : undefined,
-        }),
+      // Markov + brick-pattern — ALL plans
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, `Markov + pattern — ${activeBrickSym || 'select a symbol'}`),
+        React.createElement('div', { className: 'tla-explainer' },
+          'Short-term shape + longer statistical odds for the SELECTED symbol. Brick pattern reads the last 10 bricks; Markov P(up in 3) fits a 3-state chain on up to 200 closes.'),
+        React.createElement('div', { className: 'tla-grid' },
+          React.createElement(StatCard, {
+            title: 'Brick pattern',
+            value: pattern || '—',
+            sub: `last ${brickWindow.length} bricks · ${(sweepRow && sweepRow.regime) || 'regime n/a'}`,
+          }),
+          React.createElement(StatCard, {
+            title: 'Markov P(up in 3)',
+            value: markov ? (markov.pUp * 100).toFixed(1) + '%' : '—',
+            sub: markov ? `P(down) ${(markov.pDown * 100).toFixed(1)}% · ${markov.n} bricks` : 'needs ≥10 bricks',
+            tone: markov && markov.pUp > 0.5 ? 'pos' : markov && markov.pUp < 0.5 ? 'neg' : undefined,
+          }),
+        ),
+        React.createElement('div', { className: 'tla-hint' },
+          `Analyzes the symbol selected in the chart above (${activeBrickSym || 'none'}). Nuance: Brick pattern = the last 10 bricks only (short-term shape: 3-push / pullback / chop). Markov P(up in 3) = a 3-state UP/DOWN/FLAT Markov chain fitted on up to 200 brick closes (longer statistical fit) — the probability the next 3-brick move is UP. A 50% value means no edge; >50% leans bullish, <50% leans bearish.`),
       ),
-      React.createElement('div', { className: 'tla-hint' },
-        `Analyzes the symbol selected in the chart above (${activeBrickSym || 'none'}). Nuance: Brick pattern = the last 10 bricks only (short-term shape: 3-push / pullback / chop). Markov P(up in 3) = a 3-state UP/DOWN/FLAT Markov chain fitted on up to 200 brick closes (longer statistical fit) — the probability the next 3-brick move is UP. A 50% value means no edge; >50% leans bullish, <50% leans bearish.`),
-    ),
-
-    // EV / P_win / TimesFM forecast — standalone panel (moved below Markov + pattern, 2026-08-15).
-    // Previously rendered as below-table context cards inside TalariaKellyTable.
-    // Now all three context cards (EV, P_win, p_timesfm) are a single panel below
-    // Markov + pattern, reading the most-qualified symbol's sweep row.
-    ctxRow.symbol && React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'EV / P_win / TimesFM — ' + ctxRow.symbol),
-      React.createElement('div', { className: 'tla-grid' },
-        React.createElement(StatCard, {
-          title: 'EV — ' + ctxRow.symbol,
-          value: (ctxRow.ev != null && ctxRow.ev !== '') ? '$' + Number(ctxRow.ev).toFixed(2) : '—',
-          sub: 'expected value per $ of risk',
-          tone: (ctxRow.ev != null && ctxRow.ev !== '') ? (Number(ctxRow.ev) > 0 ? 'pos' : Number(ctxRow.ev) < 0 ? 'neg' : undefined) : undefined,
-        }),
-        React.createElement(StatCard, {
-          title: 'P_win — ' + ctxRow.symbol,
-          value: (ctxRow.p_win != null && ctxRow.p_win !== '') ? fmtKellyPct(ctxRow.p_win) : '—',
-          sub: 'predicted probability of winning',
-          tone: (ctxRow.p_win != null && ctxRow.p_win !== '') ? (Number(ctxRow.p_win) >= 0.6 ? 'pos' : Number(ctxRow.p_win) <= 0.4 ? 'neg' : 'warn') : undefined,
-        }),
-        React.createElement(StatCard, {
-          title: 'p_timesfm',
-          value: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? '📈 ' : '📉 ') + fmtKellyPct(ctxRow.p_timesfm) : '⏳ unavailable',
-          sub: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '')
-            ? ctxRow.p_timesfm > 0.5 ? 'bullish skew > 50%' : 'bearish skew < 50%'
-            : 'no TimesFM model run yet',
-          tone: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? 'pos' : 'neg') : undefined,
-        }),
+      // EV / P_win / TimesFM forecast — standalone panel (Market tab)
+      ctxRow.symbol && React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'EV / P_win / TimesFM — ' + ctxRow.symbol),
+        React.createElement('div', { className: 'tla-grid' },
+          React.createElement(StatCard, {
+            title: 'EV — ' + ctxRow.symbol,
+            value: (ctxRow.ev != null && ctxRow.ev !== '') ? '$' + Number(ctxRow.ev).toFixed(2) : '—',
+            sub: 'expected value per $ of risk',
+            tone: (ctxRow.ev != null && ctxRow.ev !== '') ? (Number(ctxRow.ev) > 0 ? 'pos' : Number(ctxRow.ev) < 0 ? 'neg' : undefined) : undefined,
+          }),
+          React.createElement(StatCard, {
+            title: 'P_win — ' + ctxRow.symbol,
+            value: (ctxRow.p_win != null && ctxRow.p_win !== '') ? fmtKellyPct(ctxRow.p_win) : '—',
+            sub: 'predicted probability of winning',
+            tone: (ctxRow.p_win != null && ctxRow.p_win !== '') ? (Number(ctxRow.p_win) >= 0.6 ? 'pos' : Number(ctxRow.p_win) <= 0.4 ? 'neg' : 'warn') : undefined,
+          }),
+          React.createElement(StatCard, {
+            title: 'p_timesfm',
+            value: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? '📈 ' : '📉 ') + fmtKellyPct(ctxRow.p_timesfm) : '⏳ unavailable',
+            sub: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '')
+              ? ctxRow.p_timesfm > 0.5 ? 'bullish skew > 50%' : 'bearish skew < 50%'
+              : 'no TimesFM model run yet',
+            tone: (ctxRow.p_timesfm != null && ctxRow.p_timesfm !== '') ? (ctxRow.p_timesfm > 0.5 ? 'pos' : 'neg') : undefined,
+          }),
+        ),
+        React.createElement('div', { className: 'tla-hint' },
+          'TimesFM is a foundation-model forecast of the next price direction, expressed as a probability (p_timesfm). >50% = bullish skew; <50% = bearish skew. For the most-qualified symbol in the Kelly table below.'),
       ),
-      React.createElement('div', { className: 'tla-hint' },
-        'TimesFM is a foundation-model forecast of the next price direction, expressed as a probability (p_timesfm). >50% = bullish skew; <50% = bearish skew. For the most-qualified symbol in the Kelly table below.'),
+      // 0.2.11: Sizing what-if — ALL plans (in Market tab, above watchlist)
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, `Sizing what-if — ${activeBrickSym || 'select a symbol'}`),
+        React.createElement('div', { className: 'tla-explainer' },
+          'If the engine sized a trade on the SELECTED symbol right now: baseline = paper equity × effective_kelly × regime multiplier, then clipped by drawdown and capped at 5% of equity.'),
+        React.createElement('div', { className: 'tla-grid' },
+          React.createElement(StatCard, {
+            title: 'Baseline size',
+            value: kellyIn != null ? `$${Number(sizing.baseline).toFixed(2)}` : '—',
+            sub: `equity $${Number(eqUsd).toFixed(2)} × kelly ${kellyIn != null ? Number(kellyIn).toFixed(3) : 'n/a'} × regime ${regInfo.mult.toFixed(2)}`,
+          }),
+          React.createElement(StatCard, {
+            title: 'Final size (capped)',
+            value: kellyIn != null ? `$${Number(sizing.final).toFixed(2)}` : '—',
+            sub: sizing.capHit ? '5% equity cap hit' : `regime ${regInfo.aggressiveness} · dd clip ${(portDd * 100).toFixed(1)}%`,
+            tone: kellyIn != null ? (sizing.final > 0 ? 'pos' : 'neg') : undefined,
+          }),
+        ),
+        React.createElement('div', { className: 'tla-hint' },
+          `Sizing for the symbol selected above (${activeBrickSym || 'none'}) — SizingEngine arithmetic: baseline = equity × effective_kelly × regime multiplier, clipped by drawdown, capped at 5% of equity`),
+      ),
+      // 0.2.11: Full-width TV chart — renders for activeBrickSym, below sizing what-if
+      React.createElement(TalariaTvChart, { symbol: activeBrickSym, sweepRow }),
     ),
-
-    // Kelly by symbol — latest sweep (TABLE format, 2026-08-12 redesign).
-    // Moved below Markov + pattern + TimesFM. Groups by asset_class, sorts by symbol.
-    // Excludes brick_* columns. Below-table context: EV / P_win only (TimesFM is above).
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Kelly by symbol'),
-      React.createElement('div', { className: 'tla-explainer' },
-        'Latest signal per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. The EV, P_win, and TimesFM forecast panels (below Markov + pattern) show metrics for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest signal did NOT qualify — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
-      React.createElement(TalariaKellyTable, { sweeps, symbols }),
-    ),
-
-    isPro ? React.createElement(PaperSection, {
-      positions: paperPositions,
-      equity: paperEquity,
-      events: paperEvents,
-    }) : null,
-
-    // --- Phase 2/3 analytics cards (data computed above) ---
-
-    // Signal health scoreboard — ALL plans. Wilson lower bound + BH-FDR over
-    // two-sided binomial p-values (null: true win rate = 50%).
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Signal health scoreboard'),
-      React.createElement('div', { className: 'tla-explainer' },
-        '30-day resolved-signal record per symbol. Wilson LB = 95% lower confidence bound on true win rate; sig = statistically above 50% after BH-FDR correction. Higher + sig = more reliable signals.'),
-      signalHealth.error
-        ? React.createElement('div', { className: 'tla-hint' },
-            'Signal health view not deployed yet (migration 110) — ' + signalHealth.error.message)
-        : sigHealthRows.length === 0
-          ? React.createElement('div', { className: 'tla-hint' }, 'No resolved signals yet — rows appear once the EOD resolver closes signals.')
-          : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
-              React.createElement('thead', null,
-                React.createElement('tr', null,
-                  React.createElement('th', null, 'Symbol'),
-                  React.createElement('th', null, 'Resolved'),
-                  React.createElement('th', null, 'Win rate'),
-                  React.createElement('th', null, 'WR LB'),
-                  React.createElement('th', null, 'Bias'),
-                  React.createElement('th', null, 'Profit factor'),
-                  React.createElement('th', null, 'Total PnL'))),
-              React.createElement('tbody', null,
-                sigHealthPageRows.map((r, i) => {
-                  const fdr = fdrBySym[r.symbol]
-                  const lb = (r.n_resolved > 0 && r.n_tp != null)
-                    ? wilsonLower(Number(r.n_resolved), Number(r.n_tp))
-                    : null
-                  return React.createElement('tr', { key: r.symbol + i },
-                    React.createElement('td', null,
-                      r.symbol,
-                      fdr && fdr.significant
-                        ? React.createElement('span', { className: cn('tla-badge', 'tla-hot-chip'), title: 'survives BH-FDR at 0.05' }, 'sig')
-                        : null),
-                    React.createElement('td', null, r.n_resolved != null ? String(r.n_resolved) : '—'),
-                    React.createElement('td', null, r.win_rate != null ? (Number(r.win_rate) * 100).toFixed(1) + '%' : '—'),
-                    React.createElement('td', { className: 'tla-sm' }, lb != null ? (lb * 100).toFixed(1) + '%' : '—'),
-                    React.createElement('td', {
-                      className: r.bias != null && Number(r.bias) > 0.10 ? 'tla-neg' : r.bias != null && Number(r.bias) < -0.10 ? 'tla-pos' : '',
-                    }, r.bias != null ? Number(r.bias).toFixed(3) : '—'),
-                    React.createElement('td', null, r.profit_factor != null ? Number(r.profit_factor).toFixed(2) : '—'),
-                    React.createElement('td', {
-                      className: r.total_pnl != null && Number(r.total_pnl) >= 0 ? 'tla-pos' : 'tla-neg',
-                    }, r.total_pnl != null ? `$${Number(r.total_pnl).toFixed(2)}` : '—'),
-                  )
-                }),
+    // Analysis tab — historical/aggregate panels
+    activeTab === 'analysis' && React.createElement(React.Fragment, null,
+      // Kelly by symbol — latest sweep (TABLE format)
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'Kelly by symbol'),
+        React.createElement('div', { className: 'tla-explainer' },
+          'Latest signal per symbol. Table is grouped by asset class and sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell). Brick columns excluded. The EV, P_win, and TimesFM forecast panels show metrics for the most-qualified symbol. Rows with — in signal/price columns represent symbols whose latest signal did NOT qualify — the regime, aggression, and prev_regime values are still current; only the signal-dependent fields (p_win, EV, markov probabilities, entry/SL/TP) are blank.'),
+        React.createElement(TalariaKellyTable, { sweeps, symbols }),
+      ),
+      // Paper portfolio — Precision Pro only
+      isPro ? React.createElement(PaperSection, {
+        positions: paperPositions,
+        equity: paperEquity,
+        events: paperEvents,
+      }) : null,
+      // Signal health scoreboard — ALL plans
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'Signal health scoreboard'),
+        React.createElement('div', { className: 'tla-explainer' },
+          '30-day resolved-signal record per symbol. Wilson LB = 95% lower confidence bound on true win rate; sig = statistically above 50% after BH-FDR correction. Higher + sig = more reliable signals.'),
+        signalHealth.error
+          ? React.createElement('div', { className: 'tla-hint' },
+              'Signal health view not deployed yet (migration 110) — ' + signalHealth.error.message)
+          : sigHealthRows.length === 0
+            ? React.createElement('div', { className: 'tla-hint' }, 'No resolved signals yet — rows appear once the EOD resolver closes signals.')
+            : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+                React.createElement('thead', null,
+                  React.createElement('tr', null,
+                    React.createElement('th', null, 'Symbol'),
+                    React.createElement('th', null, 'Resolved'),
+                    React.createElement('th', null, 'Win rate'),
+                    React.createElement('th', null, 'WR LB'),
+                    React.createElement('th', null, 'Bias'),
+                    React.createElement('th', null, 'Profit factor'),
+                    React.createElement('th', null, 'Total PnL'))),
+                React.createElement('tbody', null,
+                  sigHealthPageRows.map((r, i) => {
+                    const fdr = fdrBySym[r.symbol]
+                    const lb = (r.n_resolved > 0 && r.n_tp != null)
+                      ? wilsonLower(Number(r.n_resolved), Number(r.n_tp))
+                      : null
+                    return React.createElement('tr', { key: r.symbol + i },
+                      React.createElement('td', null,
+                        r.symbol,
+                        fdr && fdr.significant
+                          ? React.createElement('span', { className: cn('tla-badge', 'tla-hot-chip'), title: 'survives BH-FDR at 0.05' }, 'sig')
+                          : null),
+                      React.createElement('td', null, r.n_resolved != null ? String(r.n_resolved) : '—'),
+                      React.createElement('td', null, r.win_rate != null ? (Number(r.win_rate) * 100).toFixed(1) + '%' : '—'),
+                      React.createElement('td', { className: 'tla-sm' }, lb != null ? (lb * 100).toFixed(1) + '%' : '—'),
+                      React.createElement('td', {
+                        className: r.bias != null && Number(r.bias) > 0.10 ? 'tla-neg' : r.bias != null && Number(r.bias) < -0.10 ? 'tla-pos' : '',
+                      }, r.bias != null ? Number(r.bias).toFixed(3) : '—'),
+                      React.createElement('td', null, r.profit_factor != null ? Number(r.profit_factor).toFixed(2) : '—'),
+                      React.createElement('td', {
+                        className: r.total_pnl != null && Number(r.total_pnl) >= 0 ? 'tla-pos' : 'tla-neg',
+                      }, r.total_pnl != null ? `$${Number(r.total_pnl).toFixed(2)}` : '—'),
+                    )
+                  }),
+                ),
               ),
-            ),
-      React.createElement(Pager, { page: sigHealthPage, pages: sigHealthPages, onChange: setSigHealthPage }),
-      React.createElement('div', { className: 'tla-hint' },
-        '30-day window · Wilson lower bound (95%) · sig = survives BH-FDR at 0.05 · bias = predicted − realized win rate'),
-    ),
-
-    // Calibration bias — ALL plans (migration 103).
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Calibration bias (7d)'),
-      React.createElement('div', { className: 'tla-explainer' },
-        'Does predicted win rate match reality? OVERCONFIDENT = the model predicted a HIGHER win rate than it delivered (be cautious). UNDERCONFIDENT = it wins more than predicted. Near 0 = well calibrated.'),
-      calib.error
-        ? React.createElement('div', { className: 'tla-hint' }, 'Calibration view not deployed yet — ' + calib.error.message)
-        : calibRows.length === 0
-          ? React.createElement('div', { className: 'tla-hint' }, 'No calibration rows yet — resolved signals needed.')
-          : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
-              React.createElement('thead', null,
-                React.createElement('tr', null,
-                  React.createElement('th', null, 'Day'),
-                  React.createElement('th', null, 'Symbol'),
-                  React.createElement('th', null, 'Predicted'),
-                  React.createElement('th', null, 'Realized'),
-                  React.createElement('th', null, 'Bias'),
-                  React.createElement('th', null, 'Status'))),
-              React.createElement('tbody', null,
-                calibRows.map((r, i) => (
-                  React.createElement('tr', { key: (r.day || '') + (r.symbol || '') + i },
-                    React.createElement('td', { className: 'tla-sm' }, String(r.day || '').slice(0, 10)),
-                    React.createElement('td', null, r.symbol || '—'),
-                    React.createElement('td', null, r.avg_predicted_p_win != null ? (Number(r.avg_predicted_p_win) * 100).toFixed(1) + '%' : '—'),
-                    React.createElement('td', null, r.realized_win_rate != null ? (Number(r.realized_win_rate) * 100).toFixed(1) + '%' : '—'),
-                    React.createElement('td', {
-                      className: r.bias != null && Number(r.bias) > 0.10 ? 'tla-neg' : r.bias != null && Number(r.bias) < -0.10 ? 'tla-pos' : '',
-                    }, r.bias != null ? Number(r.bias).toFixed(3) : '—'),
-                    React.createElement('td', null,
-                      React.createElement('span', {
-                        className: cn('tla-badge',
-                          r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
-                      }, r.status || '—')),
-                  )
-                )),
-              ),
-            ),
-      React.createElement('div', { className: 'tla-hint' },
-        'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. · last 10 rows'),
-    ),
-
-    // Sizing what-if — ALL plans (arithmetic on sweep kelly + equity).
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, `Sizing what-if — ${activeBrickSym || 'select a symbol'}`),
-      React.createElement('div', { className: 'tla-explainer' },
-        'If the engine sized a trade on the SELECTED symbol right now: baseline = paper equity × effective_kelly × regime multiplier, then clipped by drawdown and capped at 5% of equity.'),
-      React.createElement('div', { className: 'tla-grid' },
-        React.createElement(StatCard, {
-          title: 'Baseline size',
-          value: kellyIn != null ? `$${Number(sizing.baseline).toFixed(2)}` : '—',
-          sub: `equity $${Number(eqUsd).toFixed(2)} × kelly ${kellyIn != null ? Number(kellyIn).toFixed(3) : 'n/a'} × regime ${regInfo.mult.toFixed(2)}`,
-        }),
-        React.createElement(StatCard, {
-          title: 'Final size (capped)',
-          value: kellyIn != null ? `$${Number(sizing.final).toFixed(2)}` : '—',
-          sub: sizing.capHit ? '5% equity cap hit' : `regime ${regInfo.aggressiveness} · dd clip ${(portDd * 100).toFixed(1)}%`,
-          tone: kellyIn != null ? (sizing.final > 0 ? 'pos' : 'neg') : undefined,
-        }),
+        React.createElement(Pager, { page: sigHealthPage, pages: sigHealthPages, onChange: setSigHealthPage }),
+        React.createElement('div', { className: 'tla-hint' },
+          '30-day window · Wilson lower bound (95%) · sig = survives BH-FDR at 0.05 · bias = predicted − realized win rate'),
       ),
-      React.createElement('div', { className: 'tla-hint' },
-        `Sizing for the symbol selected above (${activeBrickSym || 'none'}) — SizingEngine arithmetic: baseline = equity × effective_kelly × regime multiplier, clipped by drawdown, capped at 5% of equity`),
-    ),
-
-    // Portfolio tear-sheet — Precision Pro only (SQL view, migration 110).
-    isPro ? React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Portfolio stats — Precision Pro'),
-      React.createElement('div', { className: 'tla-explainer' },
-        'What this is: risk-adjusted performance of the CLOSED paper trades in the Paper portfolio section above (Sharpe, Sortino, Calmar, drawdown, profit factor, total PnL). These are computed from the ACTUAL sized paper book — the same +$0.xx number you see in Paper equity — NOT the theoretical Signal health scoreboard. Dash (—) = not enough CLOSED trades yet for a meaningful number, which is expected early on.'),
-      portStats.error
-        ? React.createElement('div', { className: 'tla-hint' }, 'Portfolio stats view not deployed yet (migration 110) — ' + portStats.error.message)
-        : portRow
-          ? React.createElement('div', { className: 'tla-grid' },
-              React.createElement(StatCard, { title: 'Sharpe', value: portRow.sharpe != null ? Number(portRow.sharpe).toFixed(2) : '—', sub: 'annualized daily' }),
-              React.createElement(StatCard, { title: 'Sortino', value: portRow.sortino != null ? Number(portRow.sortino).toFixed(2) : '—', sub: 'downside-only' }),
-              React.createElement(StatCard, { title: 'Calmar', value: portRow.calmar != null ? Number(portRow.calmar).toFixed(2) : '—', sub: 'return / max DD' }),
-              React.createElement(StatCard, { title: 'Max DD %', value: portRow.max_dd_pct != null ? (Number(portRow.max_dd_pct) * 100).toFixed(1) + '%' : '—', sub: 'peak-to-trough', tone: portRow.max_dd_pct != null && Number(portRow.max_dd_pct) > 0.10 ? 'neg' : undefined }),
-              React.createElement(StatCard, { title: 'Vol ann %', value: portRow.vol_annual_pct != null ? (Number(portRow.vol_annual_pct) * 100).toFixed(1) + '%' : '—', sub: 'daily σ annualized' }),
-              React.createElement(StatCard, { title: 'Profit factor', value: portRow.profit_factor != null ? Number(portRow.profit_factor).toFixed(2) : '—', sub: 'gross wins / gross losses', tone: portRow.profit_factor != null && Number(portRow.profit_factor) >= 1 ? 'pos' : 'neg' }),
-              React.createElement(StatCard, { title: 'Total PnL', value: portRow.total_pnl != null ? `$${Number(portRow.total_pnl).toFixed(2)}` : '—', sub: portRow.n_trades != null ? `${portRow.n_trades} trades · win rate ${portRow.win_rate != null ? (Number(portRow.win_rate) * 100).toFixed(1) + '%' : '—'}` : '', tone: portRow.total_pnl != null && Number(portRow.total_pnl) >= 0 ? 'pos' : 'neg' }),
+      // Calibration bias — ALL plans
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'Calibration bias (7d)'),
+        React.createElement('div', { className: 'tla-explainer' },
+          'Does predicted win rate match reality? OVERCONFIDENT = the model predicted a HIGHER win rate than it delivered (be cautious). UNDERCONFIDENT = it wins more than predicted. Near 0 = well calibrated.'),
+        calib.error
+          ? React.createElement('div', { className: 'tla-hint' }, 'Calibration view not deployed yet — ' + calib.error.message)
+          : calibRows.length === 0
+            ? React.createElement('div', { className: 'tla-hint' }, 'No calibration rows yet — resolved signals needed.')
+            : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+                React.createElement('thead', null,
+                  React.createElement('tr', null,
+                    React.createElement('th', null, 'Day'),
+                    React.createElement('th', null, 'Symbol'),
+                    React.createElement('th', null, 'Predicted'),
+                    React.createElement('th', null, 'Realized'),
+                    React.createElement('th', null, 'Bias'),
+                    React.createElement('th', null, 'Status'))),
+                React.createElement('tbody', null,
+                  calibRows.map((r, i) => (
+                    React.createElement('tr', { key: (r.day || '') + (r.symbol || '') + i },
+                      React.createElement('td', { className: 'tla-sm' }, String(r.day || '').slice(0, 10)),
+                      React.createElement('td', null, r.symbol || '—'),
+                      React.createElement('td', null, r.avg_predicted_p_win != null ? (Number(r.avg_predicted_p_win) * 100).toFixed(1) + '%' : '—'),
+                      React.createElement('td', null, r.realized_win_rate != null ? (Number(r.realized_win_rate) * 100).toFixed(1) + '%' : '—'),
+                      React.createElement('td', {
+                        className: r.bias != null && Number(r.bias) > 0.10 ? 'tla-neg' : r.bias != null && Number(r.bias) < -0.10 ? 'tla-pos' : '',
+                      }, r.bias != null ? Number(r.bias).toFixed(3) : '—'),
+                      React.createElement('td', null,
+                        React.createElement('span', {
+                          className: cn('tla-badge',
+                            r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
+                        }, r.status || '—')),
+                    )
+                  )),
+                ),
+              ),
+        React.createElement('div', { className: 'tla-hint' },
+          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. · last 10 rows'),
+      ),
+      // Paper vs equal-weight — Precision Pro only
+      isPro ? React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'Paper vs equal-weight (rolling 6 months)'),
+        React.createElement('div', { className: 'tla-explainer' },
+          'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that day (realized PnL books on close, signal PnL books on signal date). Read it as a trend, not an exact comparison.'),
+        vsOpt.error
+          ? React.createElement('div', { className: 'tla-hint' }, 'Comparison view not deployed yet — ' + vsOpt.error.message)
+          : vsOptRows.length === 0
+            ? React.createElement('div', { className: 'tla-hint' }, 'No comparison rows yet — check back after the engine resolves its first day of paper positions (the monthly aggregation needs ≥6 months of daily data).')
+            : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+                React.createElement('thead', null,
+                  React.createElement('tr', null,
+                    React.createElement('th', null, 'Month'),
+                    React.createElement('th', null, 'Paper PnL'),
+                    React.createElement('th', null, 'Equal-wt PnL'),
+                    React.createElement('th', null, 'Delta'))),
+                React.createElement('tbody', null,
+                  vsOptRows.map((r, i) => (
+                    React.createElement('tr', { key: (r.month || '') + i },
+                      React.createElement('td', { className: 'tla-sm' }, r.month || '—'),
+                      React.createElement('td', { className: Number(r.paper_pnl || 0) >= 0 ? 'tla-pos' : 'tla-neg' }, `$${Number(r.paper_pnl || 0).toFixed(2)}`),
+                      React.createElement('td', null, `$${Number(r.equal_wt_pnl || 0).toFixed(2)}`),
+                      React.createElement('td', {
+                        className: Number(r.delta || 0) >= 0 ? 'tla-pos' : 'tla-neg',
+                      }, `$${Number(r.delta || 0).toFixed(2)}`),
+                    )
+                  )),
+                ),
+              ),
+        React.createElement('div', { className: 'tla-hint' },
+          'Is the strategy beating the benchmark? Paper PnL = the signal engine\'s Kelly/regime-sized trades. Equal-wt PnL = what you would have made betting the same amount on every symbol with no regime filter. Delta > $0 (green) = the engine beat the equal-weight benchmark for that month; Delta < $0 (red) = the benchmark won. · rolling 6 months'),
+      ) : null,
+      // Portfolio tear-sheet — Precision Pro only
+      isPro ? React.createElement('div', { className: 'tla-card' },
+        React.createElement('h3', null, 'Portfolio stats — Precision Pro'),
+        React.createElement('div', { className: 'tla-explainer' },
+          'What this is: risk-adjusted performance of the CLOSED paper trades in the Paper portfolio section above (Sharpe, Sortino, Calmar, drawdown, profit factor, total PnL). These are computed from the ACTUAL sized paper book — the same +$0.xx number you see in Paper equity — NOT the theoretical Signal health scoreboard. Dash (—) = not enough CLOSED trades yet for a meaningful number, which is expected early on.'),
+        portStats.error
+          ? React.createElement('div', { className: 'tla-hint' }, 'Portfolio stats view not deployed yet (migration 110) — ' + portStats.error.message)
+          : portRow
+            ? React.createElement('div', { className: 'tla-grid' },
+                React.createElement(StatCard, { title: 'Sharpe', value: portRow.sharpe != null ? Number(portRow.sharpe).toFixed(2) : '—', sub: 'annualized daily' }),
+                React.createElement(StatCard, { title: 'Sortino', value: portRow.sortino != null ? Number(portRow.sortino).toFixed(2) : '—', sub: 'downside-only' }),
+                React.createElement(StatCard, { title: 'Calmar', value: portRow.calmar != null ? Number(portRow.calmar).toFixed(2) : '—', sub: 'return / max DD' }),
+                React.createElement(StatCard, { title: 'Max DD %', value: portRow.max_dd_pct != null ? (Number(portRow.max_dd_pct) * 100).toFixed(1) + '%' : '—', sub: 'peak-to-trough', tone: portRow.max_dd_pct != null && Number(portRow.max_dd_pct) > 0.10 ? 'neg' : undefined }),
+                React.createElement(StatCard, { title: 'Vol ann %', value: portRow.vol_annual_pct != null ? (Number(portRow.vol_annual_pct) * 100).toFixed(1) + '%' : '—', sub: 'daily σ annualized' }),
+                React.createElement(StatCard, { title: 'Profit factor', value: portRow.profit_factor != null ? Number(portRow.profit_factor).toFixed(2) : '—', sub: 'gross wins / gross losses', tone: portRow.profit_factor != null && Number(portRow.profit_factor) >= 1 ? 'pos' : 'neg' }),
+                React.createElement(StatCard, { title: 'Total PnL', value: portRow.total_pnl != null ? `$${Number(portRow.total_pnl).toFixed(2)}` : '—', sub: portRow.n_trades != null ? `${portRow.n_trades} trades · win rate ${portRow.win_rate != null ? (Number(portRow.win_rate) * 100).toFixed(1) + '%' : '—'}` : '', tone: portRow.total_pnl != null && Number(portRow.total_pnl) >= 0 ? 'pos' : 'neg' }),
             )
           : React.createElement('div', { className: 'tla-hint' }, 'No portfolio stats yet — the paper book needs resolved positions.'),
-      React.createElement('div', { className: 'tla-hint' },
-        'Risk-adjusted performance of the paper book over its trading history. Sharpe = reward per unit of volatility (higher is better); Sortino = same but only counts downside; Calmar = annualized return ÷ max drawdown; Max DD = worst peak-to-trough; Vol = how jumpy returns are; Profit factor = gross wins ÷ gross losses (above 1.0 = profitable); Total PnL = cumulative paper profit. Dash (—) = not enough closed trades yet for a meaningful number.'),
-    ) : null,
-
-    // Paper vs equal-weight — Precision Pro only (migration 106).
-    isPro ? React.createElement('div', { className: 'tla-card' },
-      React.createElement('h3', null, 'Paper vs equal-weight'),
-      React.createElement('div', { className: 'tla-explainer' },
-        'Is the strategy beating the benchmark? Paper PnL = the ACTUAL paper book (Kelly-sized, realized only when positions close). Equal-wt PnL = THEORETICAL unit-size PnL of every resolved signal — what you would have made betting $1 per signal on every symbol with no regime filter. IMPORTANT: these are different scales AND different timings. A negative delta usually does NOT mean the strategy lost money — it means the benchmark counted signals the paper book had not closed yet that month (realized PnL books on close, signal PnL books on signal date). Data is grouped into rolling 6-month buckets; read as a trend, not an exact comparison.'),
-      vsOpt.error
-        ? React.createElement('div', { className: 'tla-hint' }, 'Comparison view not deployed yet — ' + vsOpt.error.message)
-        : vsOptRows.length === 0
-          ? React.createElement('div', { className: 'tla-hint' }, 'No comparison rows yet.')
-          : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
-              React.createElement('thead', null,
-                React.createElement('tr', null,
-                  React.createElement('th', null, 'Month'),
-                  React.createElement('th', null, 'Paper PnL'),
-                  React.createElement('th', null, 'Equal-wt PnL'),
-                  React.createElement('th', null, 'Delta'))),
-              React.createElement('tbody', null,
-                vsOptRows.map((r, i) => (
-                  React.createElement('tr', { key: (r.month || '') + i },
-                    React.createElement('td', { className: 'tla-sm' }, r.month || '—'),
-                    React.createElement('td', { className: Number(r.paper_pnl || 0) >= 0 ? 'tla-pos' : 'tla-neg' }, `$${Number(r.paper_pnl || 0).toFixed(2)}`),
-                    React.createElement('td', null, `$${Number(r.equal_wt_pnl || 0).toFixed(2)}`),
-                    React.createElement('td', {
-                      className: Number(r.delta || 0) >= 0 ? 'tla-pos' : 'tla-neg',
-                    }, `$${Number(r.delta || 0).toFixed(2)}`),
-                  )
-                )),
-              ),
-            ),
-      React.createElement('div', { className: 'tla-hint' },
-        'Is the strategy beating the benchmark? Paper PnL = the signal engine\'s Kelly/regime-sized trades. Equal-wt PnL = what you would have made betting the same amount on every symbol with no regime filter. Delta > $0 (green) = the engine beat the equal-weight benchmark that month; Delta < $0 (red) = the benchmark won. · rolling 6 months'),
-    ) : null,
-
+        React.createElement('div', { className: 'tla-hint' },
+          'Risk-adjusted performance of the paper book over its trading history. Sharpe = reward per unit of volatility (higher is better); Sortino = same but only counts downside; Calmar = annualized return ÷ max drawdown; Max DD = worst peak-to-trough; Vol = how jumpy returns are; Profit factor = gross wins ÷ gross losses (above 1.0 = profitable); Total PnL = cumulative paper profit. Dash (—) = not enough closed trades yet for a meaningful number.'),
+      ) : null,
+    ),
+    // Footer (always visible)
     React.createElement('div', { className: 'tla-hint' },
       `Talaria v${PLUGIN_VERSION} · Copyright - Noble Trading App & Lexington Tech LLC`),
   )
