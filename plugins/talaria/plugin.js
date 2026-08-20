@@ -35,7 +35,12 @@ import { cn, host, ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
 // ---------------------------------------------------------------------------
 const CONFIG_FILE = 'talaria-config.json'
 const CLAIM_CHECK_MS = 24 * 60 * 60 * 1000 // 24h subscription re-check
-const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
+const DATA_POLL_MS = 300 * 1000 // 5min REST data fallback poll
+
+// PostHog analytics (DAU/MAU tracking). CDN lazy-loaded to avoid blocking initial render.
+// api_host: us.i.posthog.com (correct PostHog ingestion API host)
+const POSTHOG_TOKEN = 'phc_v5U5tCF7ddSmDTtjbZDp3hoV236UjpnKdGNqMWNkjskx'
+const POSTHOG_API_HOST = 'https://us.i.posthog.com'
 
 // Plugin version — bumped per release. Shown in the pane + dashboard footers
 // so the deployed build is verifiable in-app (2026-08-11).
@@ -53,7 +58,7 @@ const DATA_POLL_MS = 60 * 1000 // 60s REST data fallback poll
 //        widget showed stale). Poll now feeds oldest→newest (reverse) so the
 //        newest survives at recent[0]; addSignal always _emit()s so the pane
 //        re-renders even on re-seen (ts <= watermark) rows.
-const PLUGIN_VERSION = '0.2.11'
+const PLUGIN_VERSION = '0.2.13'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -1735,7 +1740,7 @@ function PaperSection({ positions, equity, events }) {
     ),
     React.createElement(Pager, { page: paperPage, pages: paperPages, onChange: setPaperPage }),
     React.createElement('div', { className: 'tla-hint' },
-      `${rows.length} rows · live broadcast + REST seed · 60s poll · PnL — for OPEN positions (realized only on close), so $0/blank is expected until the backend closes a trade · R-multiple = PnL ÷ risk per trade (R=1 means you made exactly one unit of risk)`),
+      `${rows.length} rows · live broadcast + REST seed · 300s poll · PnL — for OPEN positions (realized only on close), so $0/blank is expected until the backend closes a trade · R-multiple = PnL ÷ risk per trade (R=1 means you made exactly one unit of risk)`),
   )
 }
 
@@ -2836,6 +2841,35 @@ function Talaria() {
     const timer = setInterval(runCheck, CLAIM_CHECK_MS)
     return () => clearInterval(timer)
   }, [runCheck])
+
+  // PostHog — initialize once on mount, only when claim is available
+  React.useEffect(() => {
+    if (!claim || !claim.plan_slug) return
+    if (!window.posthog) {
+      const script = document.createElement('script')
+      script.src = 'https://us-assets.i.posthog.com/static/array.js'
+      script.async = true
+      script.onload = () => {
+        window.posthog.init(POSTHOG_TOKEN, {
+          api_host: POSTHOG_API_HOST,
+          person_profiles: 'identified_only',
+          defaults: '2026-05-30',
+        })
+        window.posthog.identify(claim.plan_slug, {
+          plan_slug: claim.plan_slug,
+          sub_status: claim.sub_status,
+        })
+        window.posthog.capture('dashboard_open', {
+          session_id: sessionStorage.getItem('hermes_sid') || crypto.randomUUID(),
+          plan: claim.plan_slug,
+          sub_status: claim.sub_status,
+        })
+      }
+      script.onerror = () => console.warn('[talaria] PostHog script failed to load')
+      document.head.appendChild(script)
+      return () => { if (script.parentNode) script.parentNode.removeChild(script) }
+    }
+  }, [claim && claim.plan_slug])
 
   const hasConfig = !!(config.supabase_url && config.supabase_key && config.claim_token)
 
