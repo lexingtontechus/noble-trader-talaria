@@ -3,6 +3,42 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 2026-08-19
+
+### Summary
+**TradingView symbol mapping fixes + Supabase egress assessment.** Fixed stale
+`FOREXCOM:` exchange prefixes in the TV symbol map (TradingView retagged US
+indices to `PEPPERSTONE:` prefix). Made the symbol mapping dynamic — the plugin
+now fetches `tradingview_symbol` from the `nt_symbol` Supabase table at runtime
+and uses it as the source of truth, falling back to the corrected static map.
+Also assessed Supabase free-tier egress impact for 500 users on 60s REST
+polling (see `docs/supabase_egress_assessment.md`).
+
+### Fixed
+- **TV symbol map**: `FOREXCOM:US500` → `PEPPERSTONE:US500` (TradingView retagged)
+- **TV symbol map**: `US30` → `US30USD`, `US100` → `UK100` (matches backend `nt_symbol` column names)
+- **Dynamic symbol lookup**: `useSupabaseData` for `nt_symbol` now selects
+  `tradingview_symbol` column; `TalariaTvChart` receives a `tvSymbolMap` prop
+  built from the fetched data, which takes priority over the static `TV_SYMBOL_MAP`
+  fallback. If a symbol is deactivated in `nt_symbol`, it no longer appears in
+  the dynamic map and falls back to the static entry.
+  - `tvWidgetUrl(sym, tvSymbolMap)` — checks dynamic map first
+  - `TalariaTvChart({ symbol, sweepRow, tvSymbolMap })` — accepts map prop
+  - Render call: `TalariaTvChart({ symbol, sweepRow, tvSymbolMap: tvSymbolBySym })`
+
+### Assessed
+- **Supabase egress**: 500 users × 60s polling × 5 REST endpoints = ~13 GB/day
+  (2.6× over the free plan's 5 GB limit). WebSocket Realtime is the primary
+  channel but REST polling runs unconditionally in parallel. Recommendation:
+  suppress REST polling when `wsState === 'open'` + only poll when dashboard
+  tab is visible. See `docs/supabase_egress_assessment.md`.
+
+### Files Modified
+- `plugins/talaria/desktop/plugin.js` (4 changes: FOREXCOM→PEPPERSTONE, US30→US30USD, US100→UK100, dynamic tvSymbolMap)
+- `plugins/talaria/plugin.js` (synced from desktop)
+- `.hermes/plugins/talaria/desktop/plugin.js` (hermes-plugins mirror)
+- `.hermes/plugins/talaria/plugin.js` (hermes-plugins root)
+
 ## [v0.2.11] — 2026-08-16 → 2026-08-17
 
 ### Summary

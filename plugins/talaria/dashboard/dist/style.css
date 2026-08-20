@@ -1,3 +1,19 @@
+
+:root {
+  /* Light-mode-safe fallbacks for standalone web/dashboard context.
+     In the Hermes desktop app these vars are set by the host theme. */
+  --ui-text-primary: #1a1a1a;
+  --ui-text-secondary: #4a4a4a;
+  --ui-text-tertiary: #6a6a6a;
+  --ui-text-quaternary: #888;
+  --ui-stroke-secondary: #d0d0d0;
+  --ui-accent: #2563eb;
+  --ui-danger: #dc2626;
+  --ui-success: #26d374;
+  --ui-warning: #e8b93a;
+  --ui-panel: #ffffff;
+  --ui-button-text: #ffffff;
+}
 /*
  * Talaria Remote Gateway — Dashboard Plugin Stylesheet
  *
@@ -14,108 +30,108 @@
  * <link> tag may not be injected (e.g. vite dev server proxy).
  */
 .tla-root { display: flex; flex-direction: column; height: 100%; gap: 12px; padding: 16px; overflow: auto; }
-.tla-header { display: flex; align-items: center; justify-content: center; padding: 10px 0 2px; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; border-bottom: 1px solid var(--ui-stroke-secondary, #2a2a2a); margin-bottom: 2px; gap: 8px; }
+.tla-header { display: flex; align-items: center; justify-content: center; padding: 10px 0 2px; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; border-bottom: 1px solid var(--ui-stroke-secondary); margin-bottom: 2px; gap: 8px; }
 .tla-mark { display: inline-block; flex-shrink: 0; }
 .tla-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
-.tla-card { background: var(--ui-panel, #161616); border: 1px solid var(--ui-stroke-secondary, #2a2a2a); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.tla-card h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--ui-text-secondary, #999); text-transform: uppercase; letter-spacing: 0.04em; }
-.tla-card .tla-value { font-size: 26px; font-weight: 700; color: var(--ui-text-primary, #eee); }
-.tla-card .tla-sub { font-size: 11px; color: var(--ui-text-quaternary, #777); }
+.tla-card { background: var(--ui-panel); border: 1px solid var(--ui-stroke-secondary); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.tla-card h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--ui-text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.tla-card .tla-value { font-size: 26px; font-weight: 700; color: var(--ui-text-primary); }
+.tla-card .tla-sub { font-size: 11px; color: var(--ui-text-quaternary); }
 .tla-row { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 0; font-size: 12px; }
-.tla-row .tla-k { color: var(--ui-text-tertiary, #888); }
-.tla-row .tla-v { color: var(--ui-text-primary, #eee); font-variant-numeric: tabular-nums; }
+.tla-row .tla-k { color: var(--ui-text-tertiary); }
+.tla-row .tla-v { color: var(--ui-text-primary); font-variant-numeric: tabular-nums; }
 .tla-pos { color: var(--ui-accent, #4c9aff); }
 .tla-neg { color: #ff5c5c; }
 .tla-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.tla-table th, .tla-table td { border-bottom: 1px solid var(--ui-stroke-secondary, #2a2a2a); padding: 5px 6px; text-align: left; white-space: nowrap; }
-.tla-table th { color: var(--ui-text-tertiary, #888); font-weight: 600; }
-.tla-table .tla-sm { font-size: 9px; color: var(--ui-text-secondary, #aaa); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tla-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+.tla-table th, .tla-table td { border-bottom: 1px solid var(--ui-stroke-secondary); padding: 5px 6px; text-align: left; white-space: nowrap; }
+.tla-table th { color: var(--ui-text-tertiary); font-weight: 600; }
+.tla-table .tla-sm { font-size: 9px; color: var(--ui-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tla-table tbody tr:hover { background: rgba(0,0,0,0.03); }
 .tla-kelly-table .tla-regime-cell { font-size: 14px; font-weight: 600; }
 .tla-kelly-table .tla-agg-cell { font-size: 13px; font-weight: 600; }
 .tla-kelly-table .tla-sig-cell { font-size: 13px; font-weight: 700; text-transform: uppercase; }
 .tla-kelly-table .tla-kelly-cell { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-kelly-fCell { font-size: 9px; color: var(--ui-text-secondary, #aaa); font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-kelly-fCell { font-size: 9px; color: var(--ui-text-secondary); font-variant-numeric: tabular-nums; }
 .tla-kelly-table .tla-pwin-cell { font-size: 11px; font-variant-numeric: tabular-nums; }
 .tla-kelly-table .tla-ev-cell { font-size: 11px; font-variant-numeric: tabular-nums; }
 .tla-kelly-table .tla-price-cell { font-size: 10px; font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-conf-cell { font-size: 10px; color: var(--ui-text-tertiary, #888); font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-ts-cell { font-size: 9px; color: var(--ui-text-tertiary, #888); font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-conf-cell { font-size: 10px; color: var(--ui-text-tertiary); font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-ts-cell { font-size: 9px; color: var(--ui-text-tertiary); font-variant-numeric: tabular-nums; }
 .tla-kelly-table .tla-shift-cell { font-size: 12px; text-align: center; }
-.tla-kelly-table .tla-prev-cell { font-size: 11px; color: var(--ui-text-secondary, #aaa); }
-.tla-kelly-table .tla-sizemult-cell { font-size: 9px; color: var(--ui-text-secondary, #aaa); }
-.tla-kelly-table .tla-group-header td { font-size: 11px; font-weight: 600; color: var(--ui-text-tertiary, #888); border-bottom: 1px solid var(--ui-stroke-secondary, #2a2a2a); }
+.tla-kelly-table .tla-prev-cell { font-size: 11px; color: var(--ui-text-secondary); }
+.tla-kelly-table .tla-sizemult-cell { font-size: 9px; color: var(--ui-text-secondary); }
+.tla-kelly-table .tla-group-header td { font-size: 11px; font-weight: 600; color: var(--ui-text-tertiary); border-bottom: 1px solid var(--ui-stroke-secondary); }
 .tla-kelly-table-wrap { overflow-x: auto; }
 .tla-context-card .tla-context-value { font-size: 20px; font-weight: 700; }
-.tla-context-card .tla-context-sub { font-size: 10px; color: var(--ui-text-quaternary, #777); }
+.tla-context-card .tla-context-sub { font-size: 10px; color: var(--ui-text-quaternary); }
 .tla-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
-.tla-badge.open { background: rgba(120, 220, 120, 0.15); color: #78dc78; }
+.tla-badge.open { background: rgba(120, 220, 120, 0.15); color:var(--ui-success,#26d374); }
 .tla-badge.closed { background: rgba(76, 154, 255, 0.15); color: var(--ui-accent, #4c9aff); }
 .tla-badge.opened { background: rgba(76, 154, 255, 0.15); color: var(--ui-accent, #4c9aff); }
-.tla-badge.active { background: rgba(120, 220, 120, 0.15); color: #78dc78; }
-.tla-badge.grace { background: rgba(240, 180, 60, 0.15); color: #f0b43c; }
+.tla-badge.active { background: rgba(120, 220, 120, 0.15); color:var(--ui-success,#26d374); }
+.tla-badge.grace { background: rgba(240, 180, 60, 0.15); color:var(--ui-warning,#e8b93a); }
 .tla-hot { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 8px; }
 .tla-hot-card h3 { margin-bottom: 2px; }
-.tla-hot-ts { display: block; font-size: 10px; color: var(--ui-text-quaternary, #777); margin-bottom: 2px; }
-.tla-hot-chip { display: flex; flex-direction: row; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--ui-stroke-secondary, #2a2a2a); }
-.tla-hot-chip .tla-hot-sym { font-size: 13px; font-weight: 700; color: var(--ui-text-primary, #eee); }
-.tla-hot-chip .tla-hot-kelly { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ui-text-secondary, #aaa); margin-left: 4px; }
+.tla-hot-ts { display: block; font-size: 10px; color: var(--ui-text-quaternary); margin-bottom: 2px; }
+.tla-hot-chip { display: flex; flex-direction: row; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--ui-stroke-secondary); }
+.tla-hot-chip .tla-hot-sym { font-size: 13px; font-weight: 700; color: var(--ui-text-primary); }
+.tla-hot-chip .tla-hot-kelly { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ui-text-secondary); margin-left: 4px; }
 .tla-hot-chip .tla-hot-dir { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 5px; border-radius: 4px; }
-.tla-hot-chip .tla-hot-regime { font-size: 10px; color: var(--ui-text-tertiary, #888); margin-left: 2px; white-space: nowrap; }
+.tla-hot-chip .tla-hot-regime { font-size: 10px; color: var(--ui-text-tertiary); margin-left: 2px; white-space: nowrap; }
 .tla-hot-buy { background: rgba(76, 154, 255, 0.10); border-color: rgba(76, 154, 255, 0.35); }
-.tla-hot-buy .tla-hot-dir { color: #fff; background: #2f6fd6; }
+.tla-hot-buy .tla-hot-dir { color:var(--ui-button-text,#fff); background:var(--ui-accent,#4c9aff); }
 .tla-hot-sell { background: rgba(255, 92, 92, 0.10); border-color: rgba(255, 92, 92, 0.35); }
-.tla-hot-sell .tla-hot-dir { color: #fff; background: #d64545; }
+.tla-hot-sell .tla-hot-dir { color:var(--ui-button-text,#fff); background:var(--ui-danger,#ff5c5c); }
 .tla-err { color: var(--ui-danger, #ff5c5c); font-size: 12px; padding: 8px; }
-.tla-ok { color: #78dc78; font-size: 12px; }
-.tla-hint { color: var(--ui-text-quaternary, #666); font-size: 11px; }
-.tla-explainer { color: var(--ui-text-secondary, #bbb); font-size: 11px; line-height: 1.55; background: rgba(127, 127, 127, 0.07); border-left: 3px solid var(--ui-accent, #4c9aff); padding: 7px 10px; margin: 8px 0 10px; border-radius: 0 6px 6px 0; }
+.tla-ok { color:var(--ui-success,#26d374); font-size: 12px; }
+.tla-hint { color: var(--ui-text-quaternary); font-size: 11px; }
+.tla-explainer { color: var(--ui-text-secondary); font-size: 11px; line-height: 1.55; background: rgba(0,0,0,0.02); border-left: 3px solid var(--ui-accent, #4c9aff); padding: 7px 10px; margin: 8px 0 10px; border-radius: 0 6px 6px 0; }
 .tla-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
-.tla-field label { font-size: 11px; color: var(--ui-text-tertiary, #888); }
-.tla-field input { background: var(--ui-panel, #101010); border: 1px solid var(--ui-stroke-secondary, #2a2a2a); color: var(--ui-text-primary, #eee); border-radius: 6px; padding: 7px 10px; font-size: 12px; font-family: inherit; }
-.tla-btn { background: var(--ui-accent, #4c9aff); color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-block; }
+.tla-field label { font-size: 11px; color: var(--ui-text-tertiary); }
+.tla-field input { background: var(--ui-panel); border: 1px solid var(--ui-stroke-secondary); color: var(--ui-text-primary); border-radius: 6px; padding: 7px 10px; font-size: 12px; font-family: inherit; }
+.tla-btn { background: var(--ui-accent, #4c9aff); color:var(--ui-button-text,#fff); border: none; border-radius: 6px; padding: 8px 16px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-block; }
 .tla-btn:hover { opacity: 0.9; }
-.tla-btn-secondary { background: transparent; border: 1px solid var(--ui-stroke-secondary, #2a2a2a); color: var(--ui-text-secondary, #aaa); }
+.tla-btn-secondary { background: transparent; border: 1px solid var(--ui-stroke-secondary); color: var(--ui-text-secondary); }
 .tla-btn-secondary:hover { border-color: var(--ui-accent, #4c9aff); color: var(--ui-accent, #4c9aff); opacity: 1; }
-.tla-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: rgba(240, 180, 60, 0.10); border: 1px solid rgba(240, 180, 60, 0.35); color: #f0b43c; }
+.tla-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: rgba(240, 180, 60, 0.10); border: 1px solid rgba(240, 180, 60, 0.35); color:var(--ui-warning,#e8b93a); }
 .tla-banner-paywall { background: rgba(255, 92, 92, 0.10); border-color: rgba(255, 92, 92, 0.35); color: var(--ui-danger, #ff5c5c); }
 .tla-center { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 14px; padding: 24px; text-align: center; }
-.tla-title { font-size: 18px; font-weight: 700; color: var(--ui-text-primary, #eee); }
+.tla-title { font-size: 18px; font-weight: 700; color: var(--ui-text-primary); }
 .tla-brick-picker { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
-.tla-brick-btn { background: transparent; border: 1px solid var(--ui-stroke-secondary, #2a2a2a); border-radius: 8px; color: var(--ui-text-secondary, #aaa); padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; letter-spacing: 0.03em; }
+.tla-brick-btn { background: transparent; border: 1px solid var(--ui-stroke-secondary); border-radius: 8px; color: var(--ui-text-secondary); padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; letter-spacing: 0.03em; }
 .tla-brick-btn:hover { border-color: var(--ui-accent, #4c9aff); color: var(--ui-accent, #4c9aff); }
 .tla-brick-btn-active { background: rgba(76, 154, 255, 0.18); border-color: var(--ui-accent, #4c9aff); color: var(--ui-accent, #4c9aff); }
 .tla-mini-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
 .tla-inline { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 12px; }
 .tla-badge.overconfident { background: rgba(255, 92, 92, 0.15); color: var(--ui-danger, #ff5c5c); }
-.tla-badge.underconfident { background: rgba(120, 220, 120, 0.15); color: #78dc78; }
-.tla-badge.calibrated { background: rgba(153, 153, 153, 0.15); color: var(--ui-text-tertiary, #888); }
-.tla-badge.sig { background: rgba(120, 220, 120, 0.15); color: #78dc78; }
+.tla-badge.underconfident { background: rgba(120, 220, 120, 0.15); color:var(--ui-success,#26d374); }
+.tla-badge.calibrated { background: rgba(153, 153, 153, 0.15); color: var(--ui-text-tertiary); }
+.tla-badge.sig { background: rgba(120, 220, 120, 0.15); color:var(--ui-success,#26d374); }
 
 /* 0.2.11: Tab bar + watchlist styles */
-.tla-tabs { display: flex; gap: 4px; margin: 8px 0 4px; padding-bottom: 4px; border-bottom: 1px solid var(--ui-stroke-secondary, #2a2a2a); }
-.tla-tab-btn { background: transparent; border: 1px solid var(--ui-stroke-secondary, #2a2a2a); border-radius: 6px; color: var(--ui-text-secondary, #aaa); padding: 6px 16px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; letter-spacing: .02em; }
+.tla-tabs { display: flex; gap: 4px; margin: 8px 0 4px; padding-bottom: 4px; border-bottom: 1px solid var(--ui-stroke-secondary); }
+.tla-tab-btn { background: transparent; border: 1px solid var(--ui-stroke-secondary); border-radius: 6px; color: var(--ui-text-secondary); padding: 6px 16px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; letter-spacing: .02em; }
 .tla-tab-btn:hover { border-color: var(--ui-accent, #4c9aff); color: var(--ui-accent, #4c9aff); opacity: 0.9; }
 .tla-tab-active { background: rgba(76, 154, 255, 0.18); border-color: var(--ui-accent, #4c9aff); color: var(--ui-accent, #4c9aff); }
 .tla-watchlist { display: flex; flex-direction: column; gap: 6px; }
-.tla-watchlist-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--ui-stroke-secondary, #2a2a2a); }
+.tla-watchlist-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--ui-stroke-secondary); }
 .tla-watchlist-row-active { background: rgba(76, 154, 255, 0.08); border-color: var(--ui-accent, #4c9aff); }
-.tla-watchlist-chart { flex-shrink: 0; width: 200px; height: 80px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--ui-stroke-secondary, #2a2a2a); border-radius: 4px; cursor: pointer; }
+.tla-watchlist-chart { flex-shrink: 0; width: 200px; height: 80px; background: rgba(0,0,0,0.03); border: 1px solid var(--ui-stroke-secondary); border-radius: 4px; cursor: pointer; }
 .tla-watchlist-chart-loaded { background: transparent; }
-.tla-watchlist-chart-placeholder { width: 200px; height: 80px; display: flex; align-items: center; justify-content: center; color: var(--ui-text-tertiary, #888); font-size: 10px; }
+.tla-watchlist-chart-placeholder { width: 200px; height: 80px; display: flex; align-items: center; justify-content: center; color: var(--ui-text-tertiary); font-size: 10px; }
 .tla-watchlist-svg-chart { display: block; width: 100%; height: 100%; }
-.tla-watchlist-chart-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--ui-text-tertiary, #888); font-size: 10px; }
+.tla-watchlist-chart-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--ui-text-tertiary); font-size: 10px; }
 .tla-watchlist-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-.tla-watchlist-sym { font-weight: 700; color: var(--ui-text-primary, #eee); }
-.tla-watchlist-regime { font-size: 9px; color: var(--ui-text-tertiary, #888); }
+.tla-watchlist-sym { font-weight: 700; color: var(--ui-text-primary); }
+.tla-watchlist-regime { font-size: 9px; color: var(--ui-text-tertiary); }
 .tla-watchlist-kelly { font-size: 9px; font-variant-numeric: tabular-nums; }
 .tla-watchlist-levels { display: flex; align-items: center; gap: 6px; font-size: 9px; font-variant-numeric: tabular-nums; }
-.tla-watchlist-price-entry { color: var(--ui-text-primary, #eee); }
+.tla-watchlist-price-entry { color: var(--ui-text-primary); }
 .tla-watchlist-price-sl { color: #ff5c5c; }
 .tla-watchlist-price-tp { color: var(--ui-accent, #4c9aff); }
 .tla-tv-chart-card { padding: 12px 16px; }
-.tla-tv-canvas-wrapper { width: 100%; height: 240px; position: relative; background: rgba(127,127,127,0.08); border-radius: 6px; overflow: hidden; }
-.tla-tv-pending { background: rgba(127,127,127,0.08); }
+.tla-tv-canvas-wrapper { width: 100%; height: 240px; position: relative; background: rgba(0,0,0,0.03); border-radius: 6px; overflow: hidden; }
+.tla-tv-pending { background: rgba(0,0,0,0.03); }
 .tla-tv-ready { background: transparent; }
 .tla-tv-svg-fallback { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-.tla-watchlist-age { font-size: 9px; color: var(--ui-text-quaternary, #777); margin-left: auto; }
+.tla-watchlist-age { font-size: 9px; color: var(--ui-text-quaternary); margin-left: auto; }
