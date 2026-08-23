@@ -1349,8 +1349,8 @@
     var portStats = useSupabaseData(config, 'v_talaria_portfolio_stats',
       { select: '*', limit: '1' },
       connected && isPro);
-    var calib = useSupabaseData(config, 'v_eod_calibration_bias',
-      { select: 'day,symbol,avg_predicted_p_win,realized_win_rate,bias,status', order: 'day.desc', limit: '10' },
+    var calib = useSupabaseData(config, 'v_eod_calibration_bias_latest',
+      { select: 'day,symbol,avg_predicted_p_win,realized_win_rate,bias,status,bias_raw,status_raw,n' },
       connected);
     var vsOpt = useSupabaseData(config, 'v_paper_vs_optimized_daily',
       { select: 'day,paper_pnl,equal_wt_pnl,paper_minus_equal_wt', order: 'day.desc', limit: '14' },
@@ -1670,7 +1670,9 @@
           h('th', null, 'Predicted'),
           h('th', null, 'Realized'),
           h('th', null, 'Bias'),
-          h('th', null, 'Status')
+          h('th', null, 'Status'),
+          h('th', null, 'Bias (raw)'),
+          h('th', null, 'Status (raw)')
         )
       ),
       h('tbody', null,
@@ -1689,6 +1691,22 @@
                   color: r.status === 'OVERCONFIDENT' ? '#ff5c5c' : r.status === 'UNDERCONFIDENT' ? '#78dc78' : 'var(--ui-text-tertiary)',
                 } },
                 r.status || '—')
+            ),
+            // Raw bias (2026-08-23) — pre-enforcement model output, not muted by
+            // Bayesian-shrink enforcement. See migration 119 + worklog/
+            // 20260823_calibration_bias_panel_raw_vs_enforced_mismatch.md.
+            h('td', {
+              style: {
+                color: r.bias_raw != null && Number(r.bias_raw) >= 0.30 ? '#ff5c5c' : r.bias_raw != null && Number(r.bias_raw) <= -0.20 ? '#78dc78' : undefined,
+              } },
+              r.bias_raw != null ? Number(r.bias_raw).toFixed(3) : '—'),
+            h('td', null,
+              h('span', { className: 'tla-badge',
+                style: {
+                  background: r.status_raw === 'OVERCONFIDENT' ? 'rgba(255,92,92,0.15)' : r.status_raw === 'UNDERCONFIDENT' ? 'rgba(120,220,120,0.15)' : 'rgba(153,153,153,0.15)',
+                  color: r.status_raw === 'OVERCONFIDENT' ? '#ff5c5c' : r.status_raw === 'UNDERCONFIDENT' ? '#78dc78' : 'var(--ui-text-tertiary)',
+                } },
+                r.status_raw || '—')
             )
           );
         })

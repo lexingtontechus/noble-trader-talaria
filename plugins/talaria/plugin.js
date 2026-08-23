@@ -58,7 +58,9 @@ const POSTHOG_API_HOST = 'https://us.i.posthog.com'
 //        widget showed stale). Poll now feeds oldest→newest (reverse) so the
 //        newest survives at recent[0]; addSignal always _emit()s so the pane
 //        re-renders even on re-seen (ts <= watermark) rows.
-const PLUGIN_VERSION = '0.2.13'
+// 0.2.13: (user correction 2026-08-19) fixed wrong workspace path in docs
+// 0.2.14: Phase 2 — in-plugin version check banner (upgrade notice via GitHub Releases API)
+const PLUGIN_VERSION = '0.2.14'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -70,6 +72,15 @@ const PLUGIN_VERSION = '0.2.13'
 // hide the pre-filled fields, remove Supabase references from user docs.)
 const DEFAULT_SUPABASE_URL = 'https://pcvscowltlrxzgxjurcr.supabase.co'
 const DEFAULT_ANON_KEY = 'sb_publishable_cYfseJa9z0qss0g_Y594wA_lXrWVBsa'
+
+// Phase 2: in-plugin upgrade banner (2026-08-20)
+// The plugin polls the public GitHub Releases API (no auth needed) for the
+// latest Talaria release. If the deployed PLUGIN_VERSION is behind the latest
+// release tag, an "Upgrade available" banner renders at the top of the
+// dashboard. The banner is dismissed-per-version via localStorage so a user
+// who silences v0.2.14 won't see it again until v0.2.15.
+const GITHUB_RELEASES_URL = 'https://api.github.com/repos/lexingtontechus/noble-trader-talaria/releases/latest'
+const UPDATE_CHECK_KEY = 'talaria-update-dismissed' // localStorage: JSON { [tag]: true }
 
 function loadConfig() {
   // Defaults apply when nothing is saved (or saved values are partial);
@@ -1147,6 +1158,9 @@ const CSS = [
   '.tla-btn-secondary:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);opacity:1;}',
   '.tla-banner{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;background:rgba(240,180,60,0.10);border:1px solid rgba(240,180,60,0.35);color:var(--ui-warning,#e8b93a);}',
   '.tla-banner-paywall{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);color:var(--ui-danger,#ff5c5c);}',
+  '.tla-banner-upgrade{background:rgba(120,220,120,0.10);border:1px solid rgba(120,220,120,0.35);color:var(--ui-text-primary);}',
+  '.tla-banner-upgrade .tla-upgrade-title{font-weight:600;color:var(--ui-success,#26d374);}',
+  '.tla-banner-upgrade .tla-upgrade-actions{display:inline-flex;align-items:center;gap:6px;}',
   '.tla-center{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px;padding:24px;text-align:center;}',
   '.tla-title{font-size:18px;font-weight:700;color:var(--ui-text-primary);}',
   '.tla-brick-picker{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 10px;}',
@@ -2052,7 +2066,7 @@ function sizingWhatIf(equityUsd, effectiveKelly, regimeLabel, dd = 0.15) {
 // Talaria dashboard — hot-signal banner, kelly histogram, 10-brick renko
 // chart (with ENTRY/SL/TP levels), Pro-only paper section.
 // ---------------------------------------------------------------------------
-function TalariaDashboard({ config, claim }) {
+function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
   const connected = !!(config.supabase_url && config.supabase_key)
   const isPro = claim.plan_slug === 'precision_pro'
   const [liveSignals, setLiveSignals] = React.useState([])
@@ -2147,8 +2161,8 @@ function TalariaDashboard({ config, claim }) {
     { select: '*', limit: '1' },
     connected && isPro)
   // EOD calibration bias — all plans (already anon-granted, migration 103).
-  const calib = useSupabaseData(config, 'v_eod_calibration_bias',
-    { select: 'day,symbol,avg_predicted_p_win,realized_win_rate,bias,status', order: 'day.desc', limit: '10' },
+  const calib = useSupabaseData(config, 'v_eod_calibration_bias_latest',
+    { select: 'day,symbol,avg_predicted_p_win,realized_win_rate,bias,status,bias_raw,status_raw,n' },
     connected)
   // Paper book vs equal-weight baseline — Precision Pro only (migration 106).
   const vsOpt = useSupabaseData(config, 'v_paper_vs_optimized_daily',
@@ -2285,6 +2299,9 @@ function TalariaDashboard({ config, claim }) {
       ? React.createElement('div', { className: 'tla-banner' },
           `Subscription in grace period — renews ${String(graceDate).slice(0, 10) || 'soon'} · still entitled to signals.`)
       : null,
+    // Phase 2: upgrade banner (2026-08-20) — only renders when latestRelease
+    // is set and PLUGIN_VERSION is behind the latest release tag
+    React.createElement(UpgradeBanner, { latest: latestRelease, onDismiss: onDismissUpgrade }),
     React.createElement(HotSignalsBanner, { signals: bannerSignals }),
     React.createElement('div', { className: 'tla-grid' },
       React.createElement(StatCard, {
@@ -2495,7 +2512,9 @@ function TalariaDashboard({ config, claim }) {
                     React.createElement('th', null, 'Predicted'),
                     React.createElement('th', null, 'Realized'),
                     React.createElement('th', null, 'Bias'),
-                    React.createElement('th', null, 'Status'))),
+                    React.createElement('th', null, 'Status'),
+                    React.createElement('th', null, 'Bias (raw)'),
+                    React.createElement('th', null, 'Status (raw)'))),
                 React.createElement('tbody', null,
                   calibRows.map((r, i) => (
                     React.createElement('tr', { key: (r.day || '') + (r.symbol || '') + i },
@@ -2511,12 +2530,24 @@ function TalariaDashboard({ config, claim }) {
                           className: cn('tla-badge',
                             r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
                         }, r.status || '—')),
+                      // Raw bias (2026-08-23) — pre-enforcement model output, not
+                      // muted by Bayesian-shrink enforcement. See
+                      // noble-trader-fastapi-backend migration 119 +
+                      // worklog/20260823_calibration_bias_panel_raw_vs_enforced_mismatch.md.
+                      React.createElement('td', {
+                        className: r.bias_raw != null && Number(r.bias_raw) >= 0.30 ? 'tla-neg' : r.bias_raw != null && Number(r.bias_raw) <= -0.20 ? 'tla-pos' : '',
+                      }, r.bias_raw != null ? Number(r.bias_raw).toFixed(3) : '—'),
+                      React.createElement('td', null,
+                        React.createElement('span', {
+                          className: cn('tla-badge',
+                            r.status_raw === 'OVERCONFIDENT' ? 'closed' : r.status_raw === 'UNDERCONFIDENT' ? 'opened' : ''),
+                        }, r.status_raw || '—')),
                     )
                   )),
                 ),
               ),
         React.createElement('div', { className: 'tla-hint' },
-          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. · last 10 rows'),
+          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. "(raw)" columns show the pre-enforcement model output, which enforcement may have since shrunk toward calibrated.'),
       ),
       // Paper vs equal-weight — Precision Pro only
       isPro ? React.createElement('div', { className: 'tla-card' },
@@ -2796,6 +2827,89 @@ function TalariaChip() {
   )
 }
 
+// ----------------------------------------------------------------------------
+// Phase 2: in-plugin upgrade banner (2026-08-20)
+// Polls the public GitHub Releases API for the latest Talaria release tag.
+// If the deployed PLUGIN_VERSION is behind, an upgrade banner renders.
+// Dismissal is per-version via localStorage so re-bumping the version shows it again.
+// ----------------------------------------------------------------------------
+async function checkForUpdates() {
+  try {
+    const resp = await fetch(GITHUB_RELEASES_URL)
+    if (!resp.ok) return null // network error / rate-limit → silent no-show
+    const data = await resp.json()
+    const tag = String(data.tag_name || '') // e.g. "v0.2.15"
+    const version = tag.replace(/^v/, '') // "0.2.15"
+    // If the latest release has no assets or a pre-release, skip (not a real GA ship)
+    if (!version || data.prerelease) return null
+    return { tag, version, name: data.name || tag, body: data.body || '', html_url: data.html_url || '', assets: data.assets || [] }
+  } catch {
+    return null // never blocks the dashboard render
+  }
+}
+
+function isVersionBehind(current, latest) {
+  // Simple semantic compare: compare dot-separated numeric parts
+  const a = String(current).split('.').map(Number)
+  const b = String(latest).split('.').map(Number)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] || 0
+    const bv = b[i] || 0
+    if (av < bv) return true
+    if (av > bv) return false
+  }
+  return false // equal or current is ahead
+}
+
+// Dismissed-version tracking via localStorage (persisted, per-user)
+function isUpdateDismissed(tag) {
+  try {
+    const dismissed = JSON.parse(localStorage.getItem(UPDATE_CHECK_KEY) || '{}')
+    return !!dismissed[tag]
+  } catch {
+    return false
+  }
+}
+
+function dismissUpdate(tag) {
+  try {
+    const dismissed = JSON.parse(localStorage.getItem(UPDATE_CHECK_KEY) || '{}')
+    dismissed[tag] = true
+    localStorage.setItem(UPDATE_CHECK_KEY, JSON.stringify(dismissed))
+  } catch {
+    // localStorage quota / unavailable — ignore silently
+  }
+}
+
+// Download URL: prefer the release zip asset, fall back to the release page
+function getDownloadUrl(latest) {
+  if (latest && latest.assets && latest.assets.length > 0) {
+    const zip = latest.assets.find((a) => a.name && a.name.includes('talaria-plugin-v'))
+    if (zip && zip.browser_download_url) return zip.browser_download_url
+  }
+  if (latest && latest.html_url) return latest.html_url
+  return GITHUB_RELEASES_URL
+}
+
+// Upgrade banner component — renders at the top of the dashboard header area
+function UpgradeBanner({ latest, onDismiss }) {
+  if (!latest) return null
+  if (!isVersionBehind(PLUGIN_VERSION, latest.version)) return null
+  return React.createElement('div', { className: 'tla-banner tla-banner-upgrade' },
+    React.createElement('span', { className: 'tla-upgrade-title' },
+      `Upgrade available · v${latest.version}`),
+    React.createElement('span', null, 'New version with bug fixes + improvements.'),
+    React.createElement('a',
+      { className: cn('tla-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm', 'tla-upgrade-actions'),
+        href: getDownloadUrl(latest), target: '_blank', rel: 'noreferrer', style: { fontSize: '11px', padding: '2px 8px', height: 'auto', minHeight: 'auto' } },
+      'Download'),
+    React.createElement('button',
+      { className: cn('dui-btn', 'dui-btn-ghost', 'dui-btn-sm', 'tla-upgrade-actions'),
+        onClick: onDismiss, style: { fontSize: '11px', padding: '2px 8px', height: 'auto', minHeight: 'auto', lineHeight: 1 } },
+      'Dismiss'),
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Main component — claim check + status routing
 //   invalid/expired/revoked token  → Connect (re-enter token)
@@ -2810,6 +2924,8 @@ function Talaria() {
   const [claim, setClaim] = React.useState(null)
   const [checkPhase, setCheckPhase] = React.useState('idle') // idle|running|ok|bad-token|not-deployed|error
   const [checkMsg, setCheckMsg] = React.useState('')
+  // Phase 2: upgrade banner state (2026-08-20)
+  const [latestRelease, setLatestRelease] = React.useState(null)
 
   const runCheck = React.useCallback(async () => {
     if (!config.supabase_url || !config.supabase_key || !config.claim_token) {
@@ -2871,6 +2987,20 @@ function Talaria() {
     }
   }, [claim && claim.plan_slug])
 
+  // Phase 2: check for plugin updates on mount (2026-08-20)
+  // Fires once on mount — fetches the latest GitHub release and stores it
+  // in state so the dashboard can render the upgrade banner. Only shows
+  // if the deployed PLUGIN_VERSION is behind the latest release tag.
+  React.useEffect(() => {
+    checkForUpdates().then((latest) => {
+      if (latest && latest.version && isVersionBehind(PLUGIN_VERSION, latest.version)) {
+        setLatestRelease(latest)
+      } else {
+        setLatestRelease(null)
+      }
+    })
+  }, [])
+
   const hasConfig = !!(config.supabase_url && config.supabase_key && config.claim_token)
 
   if (!hasConfig) {
@@ -2905,7 +3035,7 @@ function Talaria() {
     return React.createElement(PaywallScreen, { claim, onRetry: runCheck })
   }
   // active | grace
-  return React.createElement(TalariaDashboard, { config, claim })
+  return React.createElement(TalariaDashboard, { config, claim, latestRelease, onDismissUpgrade: () => dismissUpdate(latestRelease.tag) })
 }
 
 // ---------------------------------------------------------------------------
