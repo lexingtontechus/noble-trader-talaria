@@ -55,7 +55,7 @@
 
   // ─── Constants (mirrored from desktop plugin) ────────────────────────
 
-  var PLUGIN_VERSION = '0.2.11';
+  var PLUGIN_VERSION = '0.2.15';
   var TV_LWCHARTS_CDN = 'https://unpkg.com/lightweight-charts@4.3.0/dist/lightweight-charts.standalone.production.js';
   var TV_TIMEFRAME = '5M';
   var TV_BAR_COUNT = 60;
