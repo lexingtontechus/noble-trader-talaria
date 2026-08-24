@@ -2184,10 +2184,9 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
     signalStore.markSeen()
     return () => { signalStore.dashboardActive = false }
   }, [])
+  React.useEffect(() => signalStore.subscribe(() => setCountTick((t) => t + 1)), [])
   // Re-render when the shared qualifiedCount60m changes (poll updates it every
   // 10s) so the dashboard stat stays in lockstep with the widget/chip/toast.
-  const [, setCountTick] = React.useState(0)
-  React.useEffect(() => signalStore.subscribe(() => setCountTick((t) => t + 1)), [])
 
   // Hot-signal banner: live broadcasts + seed rows (qualified, non-neutral,
   // kelly present), deduped by symbol+ts, live first.

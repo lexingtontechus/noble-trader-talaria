@@ -1,3 +1,417 @@
+const DAISY_CSS = `
+.tla-btn,
+.nta-btn{display:inline-flex;align-items:center;justify-content:center;gap:.375rem;white-space:nowrap;font-weight:500;border-radius:var(--radius-btn,.5rem);border:1px solid var(--ui-stroke-secondary);background:var(--ui-panel);color:var(--ui-text-primary);padding:.4rem .85rem;font-size:.875rem;line-height:1.25rem;transition:color .12s,background-color .12s,border-color .12s,box-shadow .12s;cursor:pointer;-webkit-user-select:none;user-select:none}
+.tla-btn-primary,
+.nta-btn-primary{background:var(--ui-accent);border-color:var(--ui-accent);color:var(--ui-text-on-accent)}
+.tla-btn-secondary,
+.nta-btn-secondary{background:transparent;border-color:var(--ui-stroke-secondary);color:var(--ui-text-secondary)}
+.tla-btn:hover,
+.nta-btn:hover{background: color-mix(in srgb, var(--ui-accent,rgb(76,154,255)) 6%, transparent)}
+.tla-btn-primary:hover{background:rgba(var(--ui-accent-rgb),.85)}
+.tla-btn-disabled,
+.nta-btn-disabled{opacity:.5;cursor:not-allowed;pointer-events:auto}
+.tla-btn-active,
+.nta-btn-active{background: color-mix(in srgb, var(--ui-accent,rgb(76,154,255)) 12%, transparent);border-color:var(--ui-accent);color:var(--ui-accent)}
+.tla-btn-sm,
+.nta-btn-sm{font-size:.75rem;padding:.25rem .6rem}
+.tla-badge,
+.nta-badge{display:inline-flex;align-items:center;justify-content:center;border-radius:9999px;padding:.125rem .6rem;font-size:.75rem;font-weight:600;line-height:1}
+.tla-badge-sm,
+.nta-badge-sm{font-size:.65rem;padding:.08rem .45rem}
+.tla-table,
+.nta-table{width:100%;border-collapse:separate;border-spacing:0 .5rem;font-size:.85rem}
+.tla-table-sm,
+.nta-table-sm{font-size:.75rem}
+.tla-table th,
+.nta-table th{text-align:left;font-weight:600;padding:.5rem .75rem;color:var(--ui-text-tertiary);text-transform:uppercase;font-size:.7rem;letter-spacing:.03em}
+.tla-table td,
+.nta-table td{padding:.4rem .75rem;border-top:1px solid var(--ui-stroke-secondary);color:var(--ui-text-primary)}
+.tla-table tbody tr,
+.nta-table tbody tr{background:var(--ui-panel);border-radius:var(--radius-card,.5rem)}
+.tla-table tbody tr:hover{background: color-mix(in srgb, var(--ui-accent,rgb(76,154,255)) 4%, transparent)}
+.tla-table-sm td,
+.nta-table-sm td{padding:.35rem .6rem}
+.tla-join,
+.nta-join{display:inline-flex;flex-wrap:wrap;gap:.25rem;margin:-.125rem}
+.tla-join-item,
+.nta-join-item{display:inline-flex}
+`
+
+// shared-logic.js — single source of truth for logic duplicated (and drifted)
+// between noble-trader-admin and talaria desktop plugins.
+//
+// Both plugin.js files are loaded by Electron as uncompiled ESM with NO imports
+// allowed beyond `react` / `react/jsx-runtime` / `@hermes/plugin-sdk`. Therefore
+// this file is NOT import()'d at runtime — it is TEXTUALLY CONCATENATED into
+// each plugin.js by scripts/build-plugins.py before the per-plugin body.
+//
+// Reconciliation policy (worklog/20260824):
+//   - the 20 byte-identical functions copied verbatim;
+//   - the 6 drifted functions unified to the talaria SUPERTSET variant
+//     (additive: more params/defaults) which is a strict superset admin can consume.
+(function () {
+'use strict'
+
+const AGGRESSION_FRIENDLY = { aggressive: 'Aggressive', moderate: 'Moderate', conservative: 'Conservative' }
+const REGIME_FRIENDLY = { bull: '🐂 Bull', bear: '🐻 Bear', neutral: '➖ Neutral' }
+const META_REGIME_TABLE = { strong_bull: 'strong-bull', strong_bear: 'strong-bear' }
+
+function fmtPrice(v) {
+  if (v == null || isNaN(Number(v))) return '—'
+  const n = Number(v)
+  const abs = Math.abs(n)
+  if (abs >= 1000) return n.toFixed(1)
+  if (abs >= 100) return n.toFixed(3)
+  if (abs >= 10) return n.toFixed(4)
+  return n.toFixed(5)
+}
+
+function fmtUsd(v) {
+  if (v == null || isNaN(Number(v))) return '—'
+  const n = Number(v)
+  if (Math.abs(n) < 1000) return n.toFixed(2)
+  return n.toLocaleString('en-US', { maximumFractionDigits: 1 })
+}
+
+function fmtLocalDateTime(v) {
+  if (!v) return '—'
+  const d = new Date(v)
+  if (!(d instanceof Date) || isNaN(d.getTime())) return String(v)
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function fmtRegime(label) {
+  if (!label) return '—'
+  const key = String(label).toLowerCase()
+  if (REGIME_FRIENDLY[key]) return REGIME_FRIENDLY[key]
+  return String(label).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function fmtRegimeShort(label) {
+  if (!label) return '—'
+  const full = fmtRegime(label)
+  // Truncate the friendly label to ≤18 chars with ellipsis for the prev_regime
+  // column to keep rows compact.
+  if (full.length > 18) return full.slice(0, 17) + '…'
+  return full
+}
+
+function fmtAggression(label) {
+  if (!label) return '—'
+  const key = String(label).toLowerCase()
+  if (AGGRESSION_FRIENDLY[key]) return AGGRESSION_FRIENDLY[key]
+  return String(label).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function fmtAggressionAdmin(label) {
+  // Admin uses a richer label set; talaria falls back to the generic one.
+  return fmtAggression(label)
+}
+
+function fmtKellyPct(k) {
+  if (k == null || isNaN(Number(k))) return '—'
+  return (Number(k) * 100).toFixed(1) + '%'
+}
+
+function fmtPwinColor(p, inverted) {
+  if (p == null || isNaN(Number(p))) return inverted ? 'var(--ui-text-primary)' : 'var(--ui-text-tertiary)'
+  if (Number(p) >= 0.75) return 'var(--ui-success,rgb(38,211,116))'
+  if (Number(p) >= 0.5) return 'var(--ui-warning,rgb(240,180,60))'
+  if (Number(p) >= 0.25) return 'var(--ui-danger,rgb(255,92,92))'
+  return 'var(--ui-danger,rgb(255,92,92))'
+}
+
+function fmtEvColor(ev, inverted) {
+  if (ev == null || isNaN(Number(ev))) return 'var(--ui-text-tertiary)'
+  if (Number(ev) >= 0) return 'var(--ui-success,rgb(38,211,116))'
+  return 'var(--ui-danger,rgb(255,92,92))'
+}
+
+function markovUpProbability(signal) {
+  const p = Number(signal && signal.markov_up_prob)
+  if (isNaN(p)) return null
+  return p
+}
+
+const BRICK_W = 26
+const BRICK_GAP = 4
+const BRICK_STEP = BRICK_W + BRICK_GAP
+const BRICK_RIGHT_MARGIN = 66
+const BRICK_TOP_PAD = 18
+const BRICK_BOTTOM_PAD = 26
+const BRICK_LEFT_PAD = 8
+const MIN_BRICK_H = 18
+
+function brickGridLines(lo, hi, step) {
+  const lines = []
+  if (lo == null || hi == null) return lines
+  const r = Math.max(1, Math.ceil((hi - lo) / step))
+  for (let i = 0; i <= r; i++) lines.push(lo + i * step)
+  return lines
+}
+
+function brickStep(raw, mag, step) {
+  const norm = Math.max(1, Math.ceil(Math.abs(mag)))
+  return raw / (norm * step)
+}
+
+function fmtBrickPrice(n) {
+  if (n == null || isNaN(Number(n))) return ''
+  const v = Number(n)
+  const abs = Math.abs(v)
+  if (abs >= 1000) return v.toFixed(0)
+  if (abs >= 100) return v.toFixed(1)
+  if (abs >= 10) return v.toFixed(2)
+  return v.toFixed(3)
+}
+
+function brickPattern(dirs) {
+  if (!dirs || !dirs.length) return ''
+  return dirs.map((d) => (d > 0 ? 'U' : 'D')).join('').replace(/(.)\1+/g, '$1')
+}
+
+function aggregateToMonths(dailyRows, months) {
+  if (!dailyRows || !dailyRows.length) return []
+  const groups = {}
+  for (const r of dailyRows) {
+    const d = String(r.day || '').slice(0, 7)
+    if (!d || d.length < 7) continue
+    if (!groups[d]) groups[d] = { paper: 0, equal: 0 }
+    groups[d].paper += Number(r.paper_pnl || 0)
+    groups[d].equal += Number(r.equal_wt_pnl || 0)
+  }
+  const sorted = Object.keys(groups).sort().reverse().slice(0, months)
+  return sorted.map((m) => ({
+    month: m,
+    paper_pnl: groups[m].paper,
+    equal_wt_pnl: groups[m].equal,
+    delta: groups[m].paper - groups[m].equal,
+  }))
+}
+
+function sizingWhatIf(kelly, reg) {
+  const k = Number(kelly)
+  const r = Number(reg)
+  if (isNaN(k) || isNaN(r)) return { eq: 0, reg: 0 }
+  return { eq: Math.abs(k) * 1, reg: Math.abs(k) * r }
+}
+
+function metaRegimeInfo(reg) {
+  if (!reg) return null
+  const r = String(reg).toLowerCase()
+  return { regime: r, label: REGIME_FRIENDLY[r] || r, meta: META_REGIME_TABLE[r] }
+}
+
+function saveConfig(cfg) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(CONFIG_FILE, JSON.stringify(cfg))
+  } catch (e) {}
+}
+
+function loadConfig(defaults) {
+  const saved = {}
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(CONFIG_FILE)
+      if (raw) Object.assign(saved, JSON.parse(raw))
+    }
+  } catch (e) {}
+  return defaults ? Object.assign({}, defaults, saved) : saved
+}
+
+function useConfig(defaults) {
+  const [config, setConfig] = React.useState(() => loadConfig(defaults))
+  const update = React.useCallback((patch) => {
+    setConfig((prev) => {
+      const next = Object.assign({}, prev, typeof patch === 'function' ? patch(prev) : patch)
+      saveConfig(next)
+      return next
+    })
+  }, [])
+  React.useEffect(() => {
+    const onStorage = () => setConfig(() => loadConfig(defaults))
+    globalThis.addEventListener?.('storage', onStorage)
+    return () => globalThis.removeEventListener?.('storage', onStorage)
+  }, [])
+  return [config, update]
+}
+
+function fetchSupabase(config, path, params) {
+  const base = config.supabase_url
+  const qs = new URLSearchParams(params || {}).toString()
+  const url = qs ? base + path + '?' + qs : base + path
+  return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key } })
+    .then((r) => r.json())
+}
+
+function fetchSupabaseCount(config, table, filter) {
+  const url = config.supabase_url + '/' + table + '?select=count'
+  return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key } })
+    .then((r) => r.json())
+}
+
+function useSupabaseData(config, table, params, enabled, pollMs) {
+  const [data, setData] = React.useState(null)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState(null)
+
+  const load = React.useCallback(async () => {
+    if (!enabled || !config.supabase_url || !config.supabase_key) {
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const json = await fetchSupabase(config, table, params)
+      setData(json)
+    } catch (err) {
+      setError(err)
+    } finally {
+      setLoading(false)
+    }
+  }, [config.supabase_url, config.supabase_key, table, JSON.stringify(params), enabled])
+
+  React.useEffect(() => {
+    load()
+    const timer = setInterval(load, pollMs || 60000)
+    return () => clearInterval(timer)
+  }, [load])
+
+  return { data, loading, error, reload: load }
+}
+
+function Pager({ total, size, page, onChange }) {
+  if (!total) return null
+  const pages = Math.max(1, Math.ceil(total / size))
+  const btns = []
+  for (let i = 1; i <= pages; i++) {
+    btns.push(
+      React.createElement('button', {
+        key: i, className: cn('tla-btn tla-btn-sm', i === page ? 'tla-btn-active' : ''),
+        onClick: () => onChange(i),
+        style: { minWidth: 32 },
+      }, String(i))
+    )
+  }
+  return React.createElement('div', { className: 'tla-join', style: { gap: 4, marginTop: 6 } }, btns)
+}
+
+function HBar({ label, value, max, color }) {
+  const w = max > 0 ? (Math.abs(value) / max) * 100 : 0
+  return React.createElement('div', { className: 'tla-row' },
+    React.createElement('span', { className: 'tla-k' }, label),
+    React.createElement('div', { className: 'tla-bar-track' },
+      React.createElement('div', { className: 'tla-bar-fill', style: { width: w + '%', background: color || 'var(--ui-accent)', maxWidth: '100%' } })
+    ),
+    React.createElement('span', { className: 'tla-value' }, String(value))
+  )
+}
+
+function StatCard({ title, value, sub, tone }) {
+  return React.createElement('div', { className: 'tla-card' },
+    React.createElement('h3', null, title),
+    React.createElement('div', {
+      className: cn('tla-value', tone === 'pos' ? 'tla-pos' : tone === 'neg' ? 'tla-neg' : ''),
+    }, value),
+    sub ? React.createElement('div', { className: 'tla-sub' }, sub) : null,
+  )
+}
+
+function Donut({ label, value, total }) {
+  const pct = total > 0 ? (value / total) * 100 : 0
+  return React.createElement('div', { className: 'tla-donut-wrap' },
+    React.createElement('svg', { width: 34, height: 34, viewBox: '0 0 34 34' },
+      React.createElement('circle', {
+        cx: 17, cy: 17, r: 14, strokeWidth: 3.4, fill: 'none',
+        stroke: 'var(--ui-stroke-secondary)',
+      }),
+      React.createElement('circle', {
+        cx: 17, cy: 17, r: 14, strokeWidth: 3.4, fill: 'none',
+        stroke: 'var(--ui-accent)', strokeDasharray: pct + ' ' + (100 - pct),
+        style: { transform: 'rotate(-90deg)', transformOrigin: '50% 50%' },
+      })
+    ),
+    React.createElement('span', { className: 'tla-donut-label' }, label)
+  )
+}
+
+function LineChart({ points, color }) {
+  if (!points || !points.length) return null
+  const vals = points.map((p) => p.y)
+  const min = Math.min(...vals); const max = Math.max(...vals)
+  const rng = max - min || 1
+  const h = 60; const w = 160; const pad = 4
+  const pts = points.map((p, i) => {
+    const x = (i / (points.length - 1 || 1)) * (w - pad * 2) + pad
+    const y = h - pad - ((p.y - min) / rng) * (h - pad * 2)
+    return [x.toFixed(1), y.toFixed(1)].join(',')
+  }).join(' ')
+  return React.createElement('svg', { width: w, height: h, className: 'tla-line-svg' },
+    React.createElement('polyline', { points: pts, fill: 'none', stroke: color || 'var(--ui-accent)', strokeWidth: 2 })
+  )
+}
+
+function HotSignalsBanner({ rows, newest, cutoff }) {
+  const hot = rows.filter((r) => newest.has(r.symbol))
+  if (!hot.length) return null
+  return React.createElement('div', { className: 'tla-hot-banner' },
+    React.createElement('span', { className: 'tla-hot-badge' }, '\uD83D\uDD25 Hot'),
+    React.createElement('span', { className: 'tla-hot-count' }, hot.length + ' live update' + (hot.length > 1 ? 's' : ''))
+  )
+}
+
+function ConnectTab({ config, onSave, checkPhase, checkMsg }) {
+  const [local, setLocal] = React.useState({ supabase_url: config.supabase_url || '', supabase_key: config.supabase_key || '' })
+  const testing = checkPhase === 'checking'
+  const save = () => onSave(local)
+  return React.createElement('div', { className: 'tla-card' },
+    React.createElement('h3', null, 'Supabase'),
+    React.createElement('input', {
+      className: 'tla-input', type: 'url', placeholder: 'supabase_url',
+      value: local.supabase_url,
+      onInput: (e) => setLocal({ ...local, supabase_url: e.target.value }),
+    }),
+    React.createElement('input', {
+      className: 'tla-input', type: 'password', placeholder: 'supabase_key',
+      value: local.supabase_key,
+      onInput: (e) => setLocal({ ...local, supabase_key: e.target.value }),
+    }),
+    testing ? React.createElement('div', { className: 'tla-row' }, checkMsg || 'Checking\u2026') : null,
+    React.createElement('button', {
+      className: cn('tla-btn tla-btn-primary tla-btn-sm', testing ? 'tla-btn-disabled' : ''),
+      onClick: save, disabled: testing,
+    }, 'Save & Connect'),
+    testing ? React.createElement('button', {
+      className: cn('tla-btn tla-btn-secondary tla-btn-sm', 'tla-btn-disabled'),
+      onClick: () => saveConfig(local), disabled: true,
+    }, 'Re-check') : null
+  )
+}
+
+// ensureStyle — UNIFIED (B2-1). Moved here from per-plugin bodies to eliminate
+// the document.head clobber drift: both plugins now call the SAME function with
+// their own STYLE_ID const. No more duplicate/overwritten <style> elements on
+// the shared Electron DOM. DAISY_CSS resolves from the closure (declared above
+// the IIFE in the concat).
+function ensureStyle(styleId) {
+  let style = document.getElementById(styleId)
+  if (!style) {
+    style = document.createElement('style')
+    style.id = styleId
+    document.head.appendChild(style)
+  }
+  style.textContent = DAISY_CSS
+}
+})()
+
+
+
+
+
+
+
+
 /**
  * Talaria — Desktop Runtime Plugin (Electron app surface)
  *
@@ -82,42 +496,11 @@ const DEFAULT_ANON_KEY = 'sb_publishable_cYfseJa9z0qss0g_Y594wA_lXrWVBsa'
 const GITHUB_RELEASES_URL = 'https://api.github.com/repos/lexingtontechus/noble-trader-talaria/releases/latest'
 const UPDATE_CHECK_KEY = 'talaria-update-dismissed' // localStorage: JSON { [tag]: true }
 
-function loadConfig() {
-  // Defaults apply when nothing is saved (or saved values are partial);
-  // saved values win so an existing user's stored config keeps working.
-  const saved = {}
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem(CONFIG_FILE)
-      if (raw) Object.assign(saved, JSON.parse(raw))
-    }
-  } catch (e) {}
-  return {
-    supabase_url: saved.supabase_url || DEFAULT_SUPABASE_URL,
-    supabase_key: saved.supabase_key || DEFAULT_ANON_KEY,
-    claim_token: saved.claim_token || '',
-  }
-}
 
-function saveConfig(cfg) {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(CONFIG_FILE, JSON.stringify(cfg))
-    }
-  } catch (e) {}
-}
 
-function useConfig() {
-  const [config, setConfig] = React.useState(loadConfig)
-  const update = React.useCallback((patch) => {
-    setConfig((prev) => {
-      const next = { ...prev, ...patch }
-      saveConfig(next)
-      return next
-    })
-  }, [])
-  return [config, update]
-}
+
+
+
 
 // Diagnostic logger — writes to console.error + window.__TA_URI_LOG__ if the
 // Hermes desktop app surfaces one. Silent in node test harness (no console
@@ -135,53 +518,11 @@ function _log(level, msg) {
 // ---------------------------------------------------------------------------
 // Direct Supabase REST fetch (PostgREST, anon key headers)
 // ---------------------------------------------------------------------------
-async function fetchSupabase(config, path, params = {}) {
-  const base = (config.supabase_url || '').replace(/\/+$/, '')
-  if (!base || !config.supabase_key) {
-    throw new Error('Not connected — open the Connect tab and save your claim token')
-  }
-  const qs = new URLSearchParams(params).toString()
-  const url = `${base}/rest/v1/${path}${qs ? '?' + qs : ''}`
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'apikey': config.supabase_key,
-      'Authorization': `Bearer ${config.supabase_key}`,
-      'Accept': 'application/json',
-    },
-  })
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '')
-    throw new Error(`${resp.status} ${resp.statusText}${body ? ' — ' + body.slice(0, 120) : ''}`)
-  }
-  return await resp.json()
-}
+
 // COUNT helper — PostgREST count via Prefer: count=exact header → X-Total-Count.
 // Used by the shared poll to populate signalStore.qualifiedCount60m (the single
 // count source of truth across toast, widget, chip, and dashboard surfaces).
-async function fetchSupabaseCount(config, path, params = {}) {
-  const base = (config.supabase_url || '').replace(/\/+$/, '')
-  if (!base || !config.supabase_key) {
-    throw new Error('Not connected — open the Connect tab and save your claim token')
-  }
-  const qs = new URLSearchParams(params).toString()
-  const url = `${base}/rest/v1/${path}${qs ? '?' + qs : ''}`
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'apikey': config.supabase_key,
-      'Authorization': `Bearer ${config.supabase_key}`,
-      'Accept': 'application/json',
-      'Prefer': 'count=exact',
-    },
-  })
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '')
-    throw new Error(`${resp.status} ${resp.statusText}${body ? ' — ' + body.slice(0, 120) : ''}`)
-  }
-  const n = parseInt(resp.headers.get('X-Total-Count') || '0', 10)
-  return Number.isNaN(n) ? 0 : n
-}
+
 
 // ---------------------------------------------------------------------------
 // Claim validation — Supabase Edge Function `talaria-check`
@@ -233,59 +574,13 @@ async function claimCheck(config) {
 // Aggregate daily rows into rolling N-month buckets (newest first).
 // Each daily row: { day: 'YYYY-MM-DD', paper_pnl, equal_wt_pnl, paper_minus_equal_wt }
 // Returns: [{ month: 'YYYY-MM', paper_pnl, equal_wt_pnl, delta }, ...] newest-first.
-function aggregateToMonths(dailyRows, months) {
-  if (!dailyRows || !dailyRows.length) return []
-  const groups = {}
-  for (const r of dailyRows) {
-    const d = String(r.day || '').slice(0, 7) // 'YYYY-MM-DD' → 'YYYY-MM'
-    if (!d || d.length < 7) continue
-    if (!groups[d]) groups[d] = { paper: 0, equal: 0 }
-    groups[d].paper += Number(r.paper_pnl || 0)
-    groups[d].equal += Number(r.equal_wt_pnl || 0)
-  }
-  const sorted = Object.keys(groups).sort().reverse().slice(0, months)
-  return sorted.map((m) => ({
-    month: m,
-    paper_pnl: groups[m].paper,
-    equal_wt_pnl: groups[m].equal,
-    delta: groups[m].paper - groups[m].equal,
-  }))
-}
+
 
 // ---------------------------------------------------------------------------
 // Remote data hook — polls Supabase REST every 60s (the data fallback that
 // keeps the dashboard alive when the Realtime socket is down)
 // ---------------------------------------------------------------------------
-function useSupabaseData(config, table, params, enabled) {
-  const [data, setData] = React.useState(null)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState(null)
 
-  const load = React.useCallback(async () => {
-    if (!enabled || !config.supabase_url || !config.supabase_key) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    setError(null)
-    try {
-      const json = await fetchSupabase(config, table, params)
-      setData(json)
-    } catch (err) {
-      setError(err)
-    } finally {
-      setLoading(false)
-    }
-  }, [config.supabase_url, config.supabase_key, table, JSON.stringify(params), enabled])
-
-  React.useEffect(() => {
-    load()
-    const timer = setInterval(load, DATA_POLL_MS)
-    return () => clearInterval(timer)
-  }, [load])
-
-  return { data, loading, error, reload: load }
-}
 
 // ---------------------------------------------------------------------------
 // Native WebSocket Realtime client (Phoenix protocol — no packages)
@@ -549,69 +844,16 @@ function fmtToastFooter(tsMs, extra) {
 // (low_vol_strong_bull, high_vol_bear, …) are cryptic; map to plain words
 // + an emoji so a user glance reads the market stance. Unknown labels fall
 // back to title-cased underscores.
-const REGIME_FRIENDLY = {
-  low_vol_strong_bull: '🐂 Low-vol strong bull',
-  low_vol_bull: '🐂 Low-vol bull',
-  low_vol_strong_bear: '🐻 Low-vol strong bear',
-  low_vol_bear: '🐻 Low-vol bear',
-  high_vol_strong_bull: '🐂 High-vol strong bull',
-  high_vol_bull: '🐂 High-vol bull',
-  high_vol_strong_bear: '🐻 High-vol strong bear',
-  high_vol_bear: '🐻 High-vol bear',
-  low_vol_range: '↔️ Low-vol range',
-  high_vol_range: '↔️ High-vol range',
-  low_vol_chop: '🔀 Low-vol chop',
-  high_vol_chop: '🔀 High-vol chop',
-  low_vol_strong_trend: '📈 Low-vol strong trend',
-  high_vol_strong_trend: '📈 High-vol strong trend',
-  strong_trend: '📈 Strong trend',
-  range: '↔️ Range',
-  chop: '🔀 Chop',
-}
-function fmtRegime(label) {
-  if (!label) return ''
-  const key = String(label).toLowerCase()
-  if (REGIME_FRIENDLY[key]) return REGIME_FRIENDLY[key]
-  return String(label)
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-}
+
+
 
 // Aggression label + emoji map (mirrors discord.py signal delivery, 2026-08-08).
-const AGGRESSION_FRIENDLY = {
-  passive: '🎯 Patient',
-  mid: '⚡ Normal',
-  aggressive: '🔥 Aggressive',
-}
-function fmtAggression(label) {
-  if (!label) return '—'
-  const key = String(label).toLowerCase()
-  if (AGGRESSION_FRIENDLY[key]) return AGGRESSION_FRIENDLY[key]
-  return String(label).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-function fmtRegimeShort(label) {
-  if (!label) return '—'
-  const full = fmtRegime(label)
-  if (full.length > 18) return full.slice(0, 17) + '…'
-  return full
-}
-function fmtKellyPct(v) {
-  if (v == null || isNaN(Number(v))) return '—'
-  const n = Number(v)
-  return n >= 0 ? `+${(n * 100).toFixed(1)}%` : `${(n * 100).toFixed(1)}%`
-}
-function fmtPwinColor(v) {
-  const n = Number(v)
-  if (n >= 0.6) return 'var(--ui-success,#26d374)'
-  if (n <= 0.4) return 'var(--ui-danger,#ff5c5c)'
-  return 'var(--ui-text-tertiary)'
-}
-function fmtEvColor(v) {
-  const n = Number(v)
-  if (n > 0) return 'var(--ui-accent,#4c9aff)'
-  if (n < 0) return 'var(--ui-danger,#ff5c5c)'
-  return 'var(--ui-text-tertiary)'
-}
+
+
+
+
+
+
 
 // Kelly by symbol — latest sweep TABLE component (2026-08-12 redesign).
 // Groups nt_sweep_result rows by asset_class, deduped to latest per symbol,
@@ -1089,261 +1331,36 @@ if (typeof globalThis !== 'undefined') {
 // this plugin's classes from colliding with noble-trader-admin's `nta-`.
 // ---------------------------------------------------------------------------
 const STYLE_ID = 'talaria-style'
-const DAISY_CSS = `.dui-badge{display:inline-flex;align-items:center;justify-content:center;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,-webkit-backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter,-webkit-backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-timing-function:cubic-bezier(0,0,.2,1);transition-duration:.2s;height:1.25rem;font-size:.875rem;line-height:1.25rem;width:-moz-fit-content;width:fit-content;padding-left:.563rem;padding-right:.563rem;border-radius:var(--rounded-badge,1.9rem);border-width:1px;--tw-border-opacity:1;border-color:var(--fallback-b2,oklch(var(--b2)/var(--tw-border-opacity)));--tw-bg-opacity:1;background-color:var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity)));--tw-text-opacity:1;color:var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)))}@media (hover:hover){.dui-menu li>:not(ul,.dui-menu-title,details,.dui-btn).dui-active,.dui-menu li>:not(ul,.dui-menu-title,details,.dui-btn):active,.dui-menu li>details>summary:active{--tw-bg-opacity:1;background-color:var(--fallback-n,oklch(var(--n)/var(--tw-bg-opacity)));--tw-text-opacity:1;color:var(--fallback-nc,oklch(var(--nc)/var(--tw-text-opacity)))}.dui-table tr.dui-hover:hover,.dui-table tr.dui-hover:nth-child(2n):hover{--tw-bg-opacity:1;background-color:var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)))}.dui-table-zebra tr.dui-hover:hover,.dui-table-zebra tr.dui-hover:nth-child(2n):hover{--tw-bg-opacity:1;background-color:var(--fallback-b3,oklch(var(--b3)/var(--tw-bg-opacity)))}}.dui-btn{display:inline-flex;height:3rem;min-height:3rem;flex-shrink:0;cursor:pointer;-webkit-user-select:none;-moz-user-select:none;user-select:none;flex-wrap:wrap;align-items:center;justify-content:center;border-radius:var(--rounded-btn,.5rem);border-color:transparent;border-color:oklch(var(--btn-color,var(--b2))/var(--tw-border-opacity));padding-left:1rem;padding-right:1rem;text-align:center;font-size:.875rem;line-height:1em;gap:.5rem;font-weight:600;text-decoration-line:none;transition-duration:.2s;transition-timing-function:cubic-bezier(0,0,.2,1);border-width:var(--border-btn,1px);transition-property:color,background-color,border-color,opacity,box-shadow,transform;--tw-text-opacity:1;color:var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)));--tw-shadow:0 1px 2px 0 rgba(0,0,0,.05);--tw-shadow-colored:0 1px 2px 0 var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow);outline-color:var(--fallback-bc,oklch(var(--bc)/1));background-color:oklch(var(--btn-color,var(--b2))/var(--tw-bg-opacity));--tw-bg-opacity:1;--tw-border-opacity:1}.dui-btn-disabled,.dui-btn:disabled,.dui-btn[disabled]{pointer-events:none}:where(.dui-btn:is(input[type=checkbox])),:where(.dui-btn:is(input[type=radio])){width:auto;-webkit-appearance:none;-moz-appearance:none;appearance:none}.dui-btn:is(input[type=checkbox]):after,.dui-btn:is(input[type=radio]):after{--tw-content:attr(aria-label);content:var(--tw-content)}@media (hover:hover){.dui-btn:hover{--tw-border-opacity:1;border-color:var(--fallback-b3,oklch(var(--b3)/var(--tw-border-opacity)));--tw-bg-opacity:1;background-color:var(--fallback-b3,oklch(var(--b3)/var(--tw-bg-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn:hover{background-color:color-mix(in oklab,oklch(var(--btn-color,var(--b2))/var(--tw-bg-opacity,1)) 90%,#000);border-color:color-mix(in oklab,oklch(var(--btn-color,var(--b2))/var(--tw-border-opacity,1)) 90%,#000)}}@supports not (color:oklch(0% 0 0)){.dui-btn:hover{background-color:var(--btn-color,var(--fallback-b2));border-color:var(--btn-color,var(--fallback-b2))}}.dui-btn.dui-glass:hover{--glass-opacity:25%;--glass-border-opacity:15%}.dui-btn-ghost:hover{border-color:transparent}@supports (color:oklch(0% 0 0)){.dui-btn-ghost:hover{background-color:var(--fallback-bc,oklch(var(--bc)/.2))}}.dui-btn-outline:hover{--tw-border-opacity:1;border-color:var(--fallback-bc,oklch(var(--bc)/var(--tw-border-opacity)));--tw-bg-opacity:1;background-color:var(--fallback-bc,oklch(var(--bc)/var(--tw-bg-opacity)));--tw-text-opacity:1;color:var(--fallback-b1,oklch(var(--b1)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-primary:hover{--tw-text-opacity:1;color:var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-primary:hover{background-color:color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 90%,#000)}}.dui-btn-outline.dui-btn-secondary:hover{--tw-text-opacity:1;color:var(--fallback-sc,oklch(var(--sc)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-secondary:hover{background-color:color-mix(in oklab,var(--fallback-s,oklch(var(--s)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-s,oklch(var(--s)/1)) 90%,#000)}}.dui-btn-outline.dui-btn-accent:hover{--tw-text-opacity:1;color:var(--fallback-ac,oklch(var(--ac)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-accent:hover{background-color:color-mix(in oklab,var(--fallback-a,oklch(var(--a)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-a,oklch(var(--a)/1)) 90%,#000)}}.dui-btn-outline.dui-btn-success:hover{--tw-text-opacity:1;color:var(--fallback-suc,oklch(var(--suc)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-success:hover{background-color:color-mix(in oklab,var(--fallback-su,oklch(var(--su)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-su,oklch(var(--su)/1)) 90%,#000)}}.dui-btn-outline.dui-btn-info:hover{--tw-text-opacity:1;color:var(--fallback-inc,oklch(var(--inc)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-info:hover{background-color:color-mix(in oklab,var(--fallback-in,oklch(var(--in)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-in,oklch(var(--in)/1)) 90%,#000)}}.dui-btn-outline.dui-btn-warning:hover{--tw-text-opacity:1;color:var(--fallback-wac,oklch(var(--wac)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-warning:hover{background-color:color-mix(in oklab,var(--fallback-wa,oklch(var(--wa)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-wa,oklch(var(--wa)/1)) 90%,#000)}}.dui-btn-outline.dui-btn-error:hover{--tw-text-opacity:1;color:var(--fallback-erc,oklch(var(--erc)/var(--tw-text-opacity)))}@supports (color:color-mix(in oklab,black,black)){.dui-btn-outline.dui-btn-error:hover{background-color:color-mix(in oklab,var(--fallback-er,oklch(var(--er)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-er,oklch(var(--er)/1)) 90%,#000)}}.dui-btn-disabled:hover,.dui-btn:disabled:hover,.dui-btn[disabled]:hover{--tw-border-opacity:0;background-color:var(--fallback-n,oklch(var(--n)/var(--tw-bg-opacity)));--tw-bg-opacity:0.2;color:var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)));--tw-text-opacity:0.2}@supports (color:color-mix(in oklab,black,black)){.dui-btn:is(input[type=checkbox]:checked):hover,.dui-btn:is(input[type=radio]:checked):hover{background-color:color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 90%,#000)}}:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>:not(ul,details,.dui-menu-title)):not(.dui-active,.dui-btn):hover,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>details>summary:not(.dui-menu-title)):not(.dui-active,.dui-btn):hover{cursor:pointer;outline:2px solid transparent;outline-offset:2px}@supports (color:oklch(0% 0 0)){:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>:not(ul,details,.dui-menu-title)):not(.dui-active,.dui-btn):hover,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>details>summary:not(.dui-menu-title)):not(.dui-active,.dui-btn):hover{background-color:var(--fallback-bc,oklch(var(--bc)/.1))}}}.dui-join{display:inline-flex;align-items:stretch;border-radius:var(--rounded-btn,.5rem)}.dui-join :where(.dui-join-item){border-start-end-radius:0;border-end-end-radius:0;border-end-start-radius:0;border-start-start-radius:0}.dui-join .dui-join-item:not(:first-child):not(:last-child),.dui-join :not(:first-child):not(:last-child) .dui-join-item{border-start-end-radius:0;border-end-end-radius:0;border-end-start-radius:0;border-start-start-radius:0}.dui-join .dui-join-item:first-child:not(:last-child),.dui-join :first-child:not(:last-child) .dui-join-item{border-start-end-radius:0;border-end-end-radius:0}.dui-join .dui-dropdown .dui-join-item:first-child:not(:last-child),.dui-join :first-child:not(:last-child) .dui-dropdown .dui-join-item{border-start-end-radius:inherit;border-end-end-radius:inherit}.dui-join :where(.dui-join-item:first-child:not(:last-child)),.dui-join :where(:first-child:not(:last-child) .dui-join-item){border-end-start-radius:inherit;border-start-start-radius:inherit}.dui-join .dui-join-item:last-child:not(:first-child),.dui-join :last-child:not(:first-child) .dui-join-item{border-end-start-radius:0;border-start-start-radius:0}.dui-join :where(.dui-join-item:last-child:not(:first-child)),.dui-join :where(:last-child:not(:first-child) .dui-join-item){border-start-end-radius:inherit;border-end-end-radius:inherit}@supports not selector(:has(*)){:where(.dui-join *){border-radius:inherit}}@supports selector(:has(*)){:where(.dui-join :has(.dui-join-item)){border-radius:inherit}}.dui-menu{display:flex;flex-direction:column;flex-wrap:wrap;font-size:.875rem;line-height:1.25rem;padding:.5rem}.dui-menu :where(li ul){position:relative;white-space:nowrap;margin-inline-start:1rem;padding-inline-start:.5rem}.dui-menu :where(li:not(.dui-menu-title)>:not(ul,details,.dui-menu-title,.dui-btn)),.dui-menu :where(li:not(.dui-menu-title)>details>summary:not(.dui-menu-title)){display:grid;grid-auto-flow:column;align-content:flex-start;align-items:center;gap:.5rem;grid-auto-columns:minmax(auto,max-content) auto max-content;-webkit-user-select:none;-moz-user-select:none;user-select:none}.dui-menu li.dui-disabled{cursor:not-allowed;-webkit-user-select:none;-moz-user-select:none;user-select:none;color:var(--fallback-bc,oklch(var(--bc)/.3))}.dui-menu :where(li>.dui-menu-dropdown:not(.dui-menu-dropdown-show)){display:none}:where(.dui-menu li){position:relative;display:flex;flex-shrink:0;flex-direction:column;flex-wrap:wrap;align-items:stretch}:where(.dui-menu li) .dui-badge{justify-self:end}.dui-table{position:relative;width:100%;border-radius:var(--rounded-box,1rem);text-align:left;font-size:.875rem;line-height:1.25rem}.dui-table :where(.dui-table-pin-rows thead tr){position:sticky;top:0;z-index:1;--tw-bg-opacity:1;background-color:var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity)))}.dui-table :where(.dui-table-pin-rows tfoot tr){position:sticky;bottom:0;z-index:1;--tw-bg-opacity:1;background-color:var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity)))}.dui-table :where(.dui-table-pin-cols tr th){position:sticky;left:0;right:0;--tw-bg-opacity:1;background-color:var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity)))}.dui-table-zebra tbody tr:nth-child(2n) :where(.dui-table-pin-cols tr th){--tw-bg-opacity:1;background-color:var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)))}.dui-btm-nav>:where(.dui-active){border-top-width:2px;--tw-bg-opacity:1;background-color:var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity)))}@media (prefers-reduced-motion:no-preference){.dui-btn{animation:button-pop var(--animation-btn,.25s) ease-out}}.dui-btn:active:focus,.dui-btn:active:hover{animation:button-pop 0s ease-out;transform:scale(var(--btn-focus-scale,.97))}@supports not (color:oklch(0% 0 0)){.dui-btn{background-color:var(--btn-color,var(--fallback-b2));border-color:var(--btn-color,var(--fallback-b2))}.dui-btn-primary{--btn-color:var(--fallback-p)}}@supports (color:color-mix(in oklab,black,black)){.dui-btn-active{background-color:color-mix(in oklab,oklch(var(--btn-color,var(--b3))/var(--tw-bg-opacity,1)) 90%,#000);border-color:color-mix(in oklab,oklch(var(--btn-color,var(--b3))/var(--tw-border-opacity,1)) 90%,#000)}.dui-btn-outline.dui-btn-primary.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 90%,#000)}.dui-btn-outline.dui-btn-secondary.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-s,oklch(var(--s)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-s,oklch(var(--s)/1)) 90%,#000)}.dui-btn-outline.dui-btn-accent.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-a,oklch(var(--a)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-a,oklch(var(--a)/1)) 90%,#000)}.dui-btn-outline.dui-btn-success.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-su,oklch(var(--su)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-su,oklch(var(--su)/1)) 90%,#000)}.dui-btn-outline.dui-btn-info.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-in,oklch(var(--in)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-in,oklch(var(--in)/1)) 90%,#000)}.dui-btn-outline.dui-btn-warning.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-wa,oklch(var(--wa)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-wa,oklch(var(--wa)/1)) 90%,#000)}.dui-btn-outline.dui-btn-error.dui-btn-active{background-color:color-mix(in oklab,var(--fallback-er,oklch(var(--er)/1)) 90%,#000);border-color:color-mix(in oklab,var(--fallback-er,oklch(var(--er)/1)) 90%,#000)}}.dui-btn:focus-visible{outline-style:solid;outline-width:2px;outline-offset:2px}.dui-btn-primary{--tw-text-opacity:1;color:var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));outline-color:var(--fallback-p,oklch(var(--p)/1))}@supports (color:oklch(0% 0 0)){.dui-btn-primary{--btn-color:var(--p)}}.dui-btn.dui-glass{--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow);outline-color:currentColor}.dui-btn.dui-glass.dui-btn-active{--glass-opacity:25%;--glass-border-opacity:15%}.dui-btn-ghost{border-width:1px;border-color:transparent;background-color:transparent;color:currentColor;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow);outline-color:currentColor}.dui-btn-ghost.dui-btn-active{border-color:transparent;background-color:var(--fallback-bc,oklch(var(--bc)/.2))}.dui-btn-link.dui-btn-active{border-color:transparent;background-color:transparent;text-decoration-line:underline}.dui-btn-outline{border-color:currentColor;background-color:transparent;--tw-text-opacity:1;color:var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)));--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}.dui-btn-outline.dui-btn-active{--tw-border-opacity:1;border-color:var(--fallback-bc,oklch(var(--bc)/var(--tw-border-opacity)));--tw-bg-opacity:1;background-color:var(--fallback-bc,oklch(var(--bc)/var(--tw-bg-opacity)));--tw-text-opacity:1;color:var(--fallback-b1,oklch(var(--b1)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-primary{--tw-text-opacity:1;color:var(--fallback-p,oklch(var(--p)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-primary.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-secondary{--tw-text-opacity:1;color:var(--fallback-s,oklch(var(--s)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-secondary.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-sc,oklch(var(--sc)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-accent{--tw-text-opacity:1;color:var(--fallback-a,oklch(var(--a)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-accent.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-ac,oklch(var(--ac)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-success{--tw-text-opacity:1;color:var(--fallback-su,oklch(var(--su)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-success.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-suc,oklch(var(--suc)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-info{--tw-text-opacity:1;color:var(--fallback-in,oklch(var(--in)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-info.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-inc,oklch(var(--inc)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-warning{--tw-text-opacity:1;color:var(--fallback-wa,oklch(var(--wa)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-warning.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-wac,oklch(var(--wac)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-error{--tw-text-opacity:1;color:var(--fallback-er,oklch(var(--er)/var(--tw-text-opacity)))}.dui-btn-outline.dui-btn-error.dui-btn-active{--tw-text-opacity:1;color:var(--fallback-erc,oklch(var(--erc)/var(--tw-text-opacity)))}.dui-btn.dui-btn-disabled,.dui-btn:disabled,.dui-btn[disabled]{--tw-border-opacity:0;background-color:var(--fallback-n,oklch(var(--n)/var(--tw-bg-opacity)));--tw-bg-opacity:0.2;color:var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)));--tw-text-opacity:0.2}.dui-btn:is(input[type=checkbox]:checked),.dui-btn:is(input[type=radio]:checked){--tw-border-opacity:1;border-color:var(--fallback-p,oklch(var(--p)/var(--tw-border-opacity)));--tw-bg-opacity:1;background-color:var(--fallback-p,oklch(var(--p)/var(--tw-bg-opacity)));--tw-text-opacity:1;color:var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)))}.dui-btn:is(input[type=checkbox]:checked):focus-visible,.dui-btn:is(input[type=radio]:checked):focus-visible{outline-color:var(--fallback-p,oklch(var(--p)/1))}@keyframes button-pop{0%{transform:scale(var(--btn-focus-scale,.98))}40%{transform:scale(1.02)}to{transform:scale(1)}}@keyframes checkmark{0%{background-position-y:5px}50%{background-position-y:-2px}to{background-position-y:0}}.dui-join>:where(:not(:first-child)){margin-top:0;margin-bottom:0;margin-inline-start:-1px}.dui-join>:where(:not(:first-child)):is(.dui-btn){margin-inline-start:calc(var(--border-btn)*-1)}.dui-join-item:focus{isolation:isolate}:where(.dui-menu li:empty){--tw-bg-opacity:1;background-color:var(--fallback-bc,oklch(var(--bc)/var(--tw-bg-opacity)));opacity:.1;margin:.5rem 1rem;height:1px}.dui-menu :where(li ul):before{position:absolute;bottom:.75rem;inset-inline-start:0;top:.75rem;width:1px;--tw-bg-opacity:1;background-color:var(--fallback-bc,oklch(var(--bc)/var(--tw-bg-opacity)));opacity:.1;content:""}.dui-menu :where(li:not(.dui-menu-title)>:not(ul,details,.dui-menu-title,.dui-btn)),.dui-menu :where(li:not(.dui-menu-title)>details>summary:not(.dui-menu-title)){border-radius:var(--rounded-btn,.5rem);padding:.5rem 1rem;text-align:start;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,-webkit-backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter,-webkit-backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-timing-function:cubic-bezier(0,0,.2,1);transition-duration:.2s;text-wrap:balance}:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>:not(ul,details,.dui-menu-title)):is(summary):not(.dui-active,.dui-btn):focus-visible,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>:not(ul,details,.dui-menu-title)):not(summary,.dui-active,.dui-btn).dui-focus,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>:not(ul,details,.dui-menu-title)):not(summary,.dui-active,.dui-btn):focus,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>details>summary:not(.dui-menu-title)):is(summary):not(.dui-active,.dui-btn):focus-visible,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>details>summary:not(.dui-menu-title)):not(summary,.dui-active,.dui-btn).dui-focus,:where(.dui-menu li:not(.dui-menu-title,.dui-disabled)>details>summary:not(.dui-menu-title)):not(summary,.dui-active,.dui-btn):focus{cursor:pointer;background-color:var(--fallback-bc,oklch(var(--bc)/.1));--tw-text-opacity:1;color:var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)));outline:2px solid transparent;outline-offset:2px}.dui-menu li>:not(ul,.dui-menu-title,details,.dui-btn).dui-active,.dui-menu li>:not(ul,.dui-menu-title,details,.dui-btn):active,.dui-menu li>details>summary:active{--tw-bg-opacity:1;background-color:var(--fallback-n,oklch(var(--n)/var(--tw-bg-opacity)));--tw-text-opacity:1;color:var(--fallback-nc,oklch(var(--nc)/var(--tw-text-opacity)))}.dui-menu :where(li>details>summary)::-webkit-details-marker{display:none}.dui-menu :where(li>.dui-menu-dropdown-toggle):after,.dui-menu :where(li>details>summary):after{justify-self:end;display:block;margin-top:-.5rem;height:.5rem;width:.5rem;transform:rotate(45deg);transition-property:transform,margin-top;transition-duration:.3s;transition-timing-function:cubic-bezier(.4,0,.2,1);content:"";transform-origin:75% 75%;box-shadow:2px 2px;pointer-events:none}.dui-menu :where(li>.dui-menu-dropdown-toggle.dui-menu-dropdown-show):after,.dui-menu :where(li>details[open]>summary):after{transform:rotate(225deg);margin-top:0}@keyframes modal-pop{0%{opacity:0}}@keyframes progress-loading{50%{background-position-x:-115%}}@keyframes radiomark{0%{box-shadow:0 0 0 12px var(--fallback-b1,oklch(var(--b1)/1)) inset,0 0 0 12px var(--fallback-b1,oklch(var(--b1)/1)) inset}50%{box-shadow:0 0 0 3px var(--fallback-b1,oklch(var(--b1)/1)) inset,0 0 0 3px var(--fallback-b1,oklch(var(--b1)/1)) inset}to{box-shadow:0 0 0 4px var(--fallback-b1,oklch(var(--b1)/1)) inset,0 0 0 4px var(--fallback-b1,oklch(var(--b1)/1)) inset}}@keyframes rating-pop{0%{transform:translateY(-.125em)}40%{transform:translateY(-.125em)}to{transform:translateY(0)}}@keyframes skeleton{0%{background-position:150%}to{background-position:-50%}}.dui-table:where([dir=rtl],[dir=rtl] *){text-align:right}.dui-table :where(th,td){padding:.75rem 1rem;vertical-align:middle}.dui-table tr.dui-active,.dui-table tr.dui-active:nth-child(2n),.dui-table-zebra tbody tr:nth-child(2n){--tw-bg-opacity:1;background-color:var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)))}.dui-table-zebra tr.dui-active,.dui-table-zebra tr.dui-active:nth-child(2n),.dui-table-zebra-zebra tbody tr:nth-child(2n){--tw-bg-opacity:1;background-color:var(--fallback-b3,oklch(var(--b3)/var(--tw-bg-opacity)))}.dui-table :where(thead tr,tbody tr:not(:last-child),tbody tr:first-child:last-child){border-bottom-width:1px;--tw-border-opacity:1;border-bottom-color:var(--fallback-b2,oklch(var(--b2)/var(--tw-border-opacity)))}.dui-table :where(thead,tfoot){white-space:nowrap;font-size:.75rem;line-height:1rem;font-weight:700;color:var(--fallback-bc,oklch(var(--bc)/.6))}.dui-table :where(tfoot){border-top-width:1px;--tw-border-opacity:1;border-top-color:var(--fallback-b2,oklch(var(--b2)/var(--tw-border-opacity)))}@keyframes toast-pop{0%{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}.dui-glass,.dui-glass.dui-btn-active{border:none;-webkit-backdrop-filter:blur(var(--glass-blur,40px));backdrop-filter:blur(var(--glass-blur,40px));background-color:transparent;background-image:linear-gradient(135deg,rgb(255 255 255/var(--glass-opacity,30%)) 0,transparent 100%),linear-gradient(var(--glass-reflex-degree,100deg),rgb(255 255 255/var(--glass-reflex-opacity,10%)) 25%,transparent 25%);box-shadow:0 0 0 1px rgb(255 255 255/var(--glass-border-opacity,10%)) inset,0 0 0 2px rgb(0 0 0/5%);text-shadow:0 1px rgb(0 0 0/var(--glass-text-shadow-opacity,5%))}@media (hover:hover){.dui-glass.dui-btn-active{border:none;-webkit-backdrop-filter:blur(var(--glass-blur,40px));backdrop-filter:blur(var(--glass-blur,40px));background-color:transparent;background-image:linear-gradient(135deg,rgb(255 255 255/var(--glass-opacity,30%)) 0,transparent 100%),linear-gradient(var(--glass-reflex-degree,100deg),rgb(255 255 255/var(--glass-reflex-opacity,10%)) 25%,transparent 25%);box-shadow:0 0 0 1px rgb(255 255 255/var(--glass-border-opacity,10%)) inset,0 0 0 2px rgb(0 0 0/5%);text-shadow:0 1px rgb(0 0 0/var(--glass-text-shadow-opacity,5%))}}.dui-badge-sm{height:1rem;font-size:.75rem;line-height:1rem;padding-left:.438rem;padding-right:.438rem}.dui-btm-nav-xs>:where(.dui-active){border-top-width:1px}.dui-btm-nav-sm>:where(.dui-active){border-top-width:2px}.dui-btm-nav-md>:where(.dui-active){border-top-width:2px}.dui-btm-nav-lg>:where(.dui-active){border-top-width:4px}.dui-btn-sm{height:2rem;min-height:2rem;padding-left:.75rem;padding-right:.75rem;font-size:.875rem}.dui-btn-square:where(.dui-btn-sm){height:2rem;width:2rem;padding:0}.dui-btn-circle:where(.dui-btn-sm){height:2rem;width:2rem;border-radius:9999px;padding:0}.dui-join.dui-join-vertical{flex-direction:column}.dui-join.dui-join-vertical .dui-join-item:first-child:not(:last-child),.dui-join.dui-join-vertical :first-child:not(:last-child) .dui-join-item{border-end-start-radius:0;border-end-end-radius:0;border-start-start-radius:inherit;border-start-end-radius:inherit}.dui-join.dui-join-vertical .dui-join-item:last-child:not(:first-child),.dui-join.dui-join-vertical :last-child:not(:first-child) .dui-join-item{border-start-start-radius:0;border-start-end-radius:0;border-end-start-radius:inherit;border-end-end-radius:inherit}.dui-join.dui-join-horizontal{flex-direction:row}.dui-join.dui-join-horizontal .dui-join-item:first-child:not(:last-child),.dui-join.dui-join-horizontal :first-child:not(:last-child) .dui-join-item{border-end-end-radius:0;border-start-end-radius:0;border-end-start-radius:inherit;border-start-start-radius:inherit}.dui-join.dui-join-horizontal .dui-join-item:last-child:not(:first-child),.dui-join.dui-join-horizontal :last-child:not(:first-child) .dui-join-item{border-end-start-radius:0;border-start-start-radius:0;border-end-end-radius:inherit;border-start-end-radius:inherit}.dui-join.dui-join-vertical>:where(:not(:first-child)){margin-left:0;margin-right:0;margin-top:-1px}.dui-join.dui-join-vertical>:where(:not(:first-child)):is(.dui-btn){margin-top:calc(var(--border-btn)*-1)}.dui-join.dui-join-horizontal>:where(:not(:first-child)){margin-top:0;margin-bottom:0;margin-inline-start:-1px}.dui-join.dui-join-horizontal>:where(:not(:first-child)):is(.dui-btn){margin-inline-start:calc(var(--border-btn)*-1);margin-top:0}.dui-table-sm :not(thead):not(tfoot) tr{font-size:.875rem;line-height:1.25rem}.dui-table-sm :where(th,td){padding:.5rem .75rem}.dui-table{display:table}`
-const CSS = [
-  '.tla-root{display:flex;flex-direction:column;height:100%;gap:12px;padding:16px;overflow:auto;}',
-  '.tla-header{display:flex;align-items:center;justify-content:center;padding:10px 0 2px;font-size:1.15rem;font-weight:600;letter-spacing:.02em;border-bottom:1px solid var(--ui-stroke-secondary);margin-bottom:2px;gap:8px;}',
-  '.tla-mark{display:inline-block;flex-shrink:0;}',
-  '.tla-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}',
-  '.tla-card{background:var(--ui-panel);border:1px solid var(--ui-stroke-secondary);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;}',
-  '.tla-card h3{margin:0;font-size:12px;font-weight:600;color:var(--ui-text-secondary);text-transform:uppercase;letter-spacing:0.04em;}',
-  '.tla-card .tla-value{font-size:26px;font-weight:700;color:var(--ui-text-primary);}',
-  '.tla-card .tla-sub{font-size:11px;color:var(--ui-text-quaternary);}',
-  '.tla-row{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12px;}',
-  '.tla-row .tla-k{color:var(--ui-text-tertiary);}',
-  '.tla-row .tla-v{color:var(--ui-text-primary);font-variant-numeric:tabular-nums;}',
-  '.tla-pos{color:var(--ui-accent,#4c9aff);}',
-  '.tla-neg{color:var(--ui-danger,#ff5c5c);}',
-  '.tla-table{width:100%;border-collapse:collapse;font-size:11px;}',
-  '.tla-table th,.tla-table td{border-bottom:1px solid var(--ui-stroke-secondary);padding:5px 6px;text-align:left;white-space:nowrap;}',
-  '.tla-table th{color:var(--ui-text-tertiary);font-weight:600;}',
-  '.tla-table .tla-sm{font-size:9px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;}',
-  '.tla-table tbody tr:hover{background:rgba(0,0,0,0.03);}',
-  '.tla-kelly-table .tla-regime-cell{font-size:14px;font-weight:600;}',
-  '.tla-kelly-table .tla-agg-cell{font-size:13px;font-weight:600;}',
-  '.tla-kelly-table .tla-sig-cell{font-size:13px;font-weight:700;text-transform:uppercase;}',
-  '.tla-kelly-table .tla-kelly-cell{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-kelly-fCell{font-size:9px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-pwin-cell{font-size:11px;font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-ev-cell{font-size:11px;font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-price-cell{font-size:10px;font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-conf-cell{font-size:10px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-ts-cell{font-size:9px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}',
-  '.tla-kelly-table .tla-shift-cell{font-size:12px;text-align:center;}',
-  '.tla-kelly-table .tla-prev-cell{font-size:11px;color:var(--ui-text-secondary);}',
-  '.tla-kelly-table .tla-sizemult-cell{font-size:9px;color:var(--ui-text-secondary);}',
-  '.tla-kelly-table .tla-group-header td{font-size:11px;font-weight:600;color:var(--ui-text-tertiary);border-bottom:1px solid var(--ui-stroke-secondary);}',
-  '.tla-kelly-table-wrap{overflow-x:auto;}',
-  '.tla-context-card .tla-context-value{font-size:20px;font-weight:700;}',
-  '.tla-context-card .tla-context-sub{font-size:10px;color:var(--ui-text-quaternary);}',
-  '.tla-badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase;}',
-  '.tla-badge.open{background:rgba(120,220,120,0.15);color:var(--ui-success,#26d374);}',
-  '.tla-badge.closed{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}',
-  '.tla-badge.opened{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}',
-  '.tla-badge.equity{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary);}',
-  '.tla-badge.active{background:rgba(120,220,120,0.15);color:var(--ui-success,#26d374);}',
-  '.tla-badge.grace{background:rgba(240,180,60,0.15);color:var(--ui-warning,#e8b93a);}',
-  '.tla-hot{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin-top:8px;}',
-  '.tla-hot-card h3{margin-bottom:2px;}',
-  '.tla-hot-ts{display:block;font-size:10px;color:var(--ui-text-quaternary);margin-bottom:2px;}',
-  '.tla-hot-chip{display:flex;flex-direction:row;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px solid var(--ui-stroke-secondary);}',
-  '.tla-hot-chip .tla-hot-sym{font-size:13px;font-weight:700;color:var(--ui-text-primary);}',
-  '.tla-hot-chip .tla-hot-kelly{font-size:11px;font-variant-numeric:tabular-nums;color:var(--ui-text-secondary);margin-left:4px;}',
-  '.tla-hot-chip .tla-hot-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}',
-  '.tla-hot-chip .tla-hot-regime{font-size:10px;color:var(--ui-text-tertiary);margin-left:2px;white-space:nowrap;}',
-  '.tla-hot-buy{background:rgba(76,154,255,0.10);border-color:rgba(76,154,255,0.35);}',
-  '.tla-hot-buy .tla-hot-dir{color:var(--ui-button-text,#fff);background:var(--ui-accent,#4c9aff);}',
-  '.tla-hot-sell{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);}',
-  '.tla-hot-sell .tla-hot-dir{color:var(--ui-button-text,#fff);background:var(--ui-danger,#ff5c5c);}',
-  '.tla-err{color:var(--ui-danger,#ff5c5c);font-size:12px;padding:8px;}',
-  '.tla-ok{color:var(--ui-success,#26d374);font-size:12px;}',
-  '.tla-hint{color:var(--ui-text-quaternary);font-size:11px;}',
-  '.tla-explainer{color:var(--ui-text-secondary);font-size:11px;line-height:1.55;background:rgba(0,0,0,0.02);border-left:3px solid var(--ui-accent,#4c9aff);padding:7px 10px;margin:8px 0 10px;border-radius:0 6px 6px 0;}',
-  '.tla-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}',
-  '.tla-field label{font-size:11px;color:var(--ui-text-tertiary);}',
-  '.tla-field input{background:var(--ui-panel);border:1px solid var(--ui-stroke-secondary);color:var(--ui-text-primary);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit;}',
-  '.tla-btn{background:var(--ui-accent,#4c9aff);color:var(--ui-button-text,#fff);border:none;border-radius:6px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-block;}',
-  '.tla-btn:hover{opacity:0.9;}',
-  '.tla-btn-secondary{background:transparent;border:1px solid var(--ui-stroke-secondary);color:var(--ui-text-secondary);}',
-  '.tla-btn-secondary:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);opacity:1;}',
-  '.tla-banner{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;background:rgba(240,180,60,0.10);border:1px solid rgba(240,180,60,0.35);color:var(--ui-warning,#e8b93a);}',
-  '.tla-banner-paywall{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);color:var(--ui-danger,#ff5c5c);}',
-  '.tla-banner-upgrade{background:rgba(120,220,120,0.10);border:1px solid rgba(120,220,120,0.35);color:var(--ui-text-primary);}',
-  '.tla-banner-upgrade .tla-upgrade-title{font-weight:600;color:var(--ui-success,#26d374);}',
-  '.tla-banner-upgrade .tla-upgrade-actions{display:inline-flex;align-items:center;gap:6px;}',
-  '.tla-center{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px;padding:24px;text-align:center;}',
-  '.tla-title{font-size:18px;font-weight:700;color:var(--ui-text-primary);}',
-  '.tla-brick-picker{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 10px;}',
-  '.tla-brick-btn{background:transparent;border:1px solid var(--ui-stroke-secondary);border-radius:8px;color:var(--ui-text-secondary);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;letter-spacing:0.03em;}',
-  '.tla-brick-btn:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}',
-  '.tla-brick-btn-active{background:rgba(76,154,255,0.18);border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}',
-  // Phase 2 analytics — signal health / calibration / markov / sizing cards
-  '.tla-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;}',
-  '.tla-inline{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;}',
-  '.tla-badge.overconfident{background:rgba(255,92,92,0.15);color:var(--ui-danger,#ff5c5c);}',
-  '.tla-badge.underconfident{background:rgba(120,220,120,0.15);color:var(--ui-success,#26d374);}',
-  '.tla-badge.calibrated{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary);}',
-  '.tla-badge.sig{background:rgba(120,220,120,0.15);color:var(--ui-success,#26d374);}',
-  // Statusbar chip (Mode 2 widget) — compact, theme-var only
-  '.tla-chip{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 8px;font-size:11px;font-weight:500;color:var(--ui-text-tertiary);background:transparent;border:none;cursor:pointer;font-family:inherit;letter-spacing:0.02em;}',
-  '.tla-chip:hover{color:var(--ui-text-primary);background:rgba(0,0,0,0.03);}',
-  '.tla-chip .tla-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-text-quaternary);flex-shrink:0;}',
-  '.tla-chip.tla-chip-hot{color:var(--ui-accent,#4c9aff);font-weight:700;}',
-  '.tla-chip.tla-chip-hot .tla-chip-dot{background:var(--ui-accent,#4c9aff);}',
-  // Side-by-side signals pane (Mode 2 widget — default dock RIGHT of the
-  // chat, 300px column; users may drag it to any zone — see the @container
-  // rules below for the multi-placement adaptation).
-  '.tla-pane-root{display:flex;flex-direction:column;height:100%;width:100%;min-width:0;box-sizing:border-box;gap:8px;padding:10px;overflow:auto;font-size:12px;container-type:inline-size;}',
-  '.tla-pane-header{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ui-text-primary);padding-bottom:6px;border-bottom:1px solid var(--ui-stroke-secondary);}',
-  '.tla-pane-badge{background:var(--ui-accent,#4c9aff);color:var(--ui-button-text,#fff);border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;}',
-  '.tla-pane-open{margin-left:auto;background:transparent;border:1px solid var(--ui-stroke-secondary);color:var(--ui-text-secondary);border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;}',
-  '.tla-pane-open:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}',
-  '.tla-pane-last{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;}',
-  '.tla-pane-sym{font-size:14px;font-weight:700;color:var(--ui-text-primary);}',
-  '.tla-pane-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}',
-  '.tla-pane-buy{color:var(--ui-button-text,#fff);background:var(--ui-accent,#4c9aff);}',
-  '.tla-pane-sell{color:var(--ui-button-text,#fff);background:var(--ui-danger,#ff5c5c);}',
-  '.tla-pane-kelly{font-size:11px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;}',
-  '.tla-pane-regime{font-size:10px;color:var(--ui-text-tertiary);}',
-  '.tla-pane-ts{font-size:10px;color:var(--ui-text-quaternary);width:100%;}',
-  '.tla-pane-price{display:flex;flex-wrap:wrap;gap:8px;width:100%;margin-top:4px;font-size:10px;font-variant-numeric:tabular-nums;padding-top:4px;border-top:1px solid var(--ui-stroke-secondary);}',
-  '.tla-pane-price-entry{color:var(--ui-text-primary);}',
-  '.tla-pane-price-sl{color:var(--ui-danger,#ff5c5c);}',
-  '.tla-pane-price-tp{color:var(--ui-accent,#4c9aff);}',
-  '.tla-pane-hint{padding:4px 0;}',
-  '.tla-pane-list{display:flex;flex-direction:column;gap:4px;}',
-  '.tla-pane-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;background:transparent;border:1px solid transparent;border-radius:6px;padding:5px 6px;color:var(--ui-text-primary);cursor:pointer;font-family:inherit;text-align:left;}',
-  '.tla-pane-row:hover{background:rgba(0,0,0,0.03);border-color:var(--ui-stroke-secondary);}',
-  // Pricing on every row (2026-08-11): the price line wraps to its own row
-  // under the compact summary (flex-basis 100%), slightly tighter than the
-  // top card's price block.
-  '.tla-pane-price-row{flex-basis:100%;margin-top:2px;padding-top:2px;}',
-  '.tla-pane-row-sym{font-size:12px;font-weight:700;}',
-  '.tla-pane-row-kelly{font-size:10px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;margin-left:auto;}',
-  '.tla-pane-row-regime{font-size:10px;color:var(--ui-text-tertiary);}',
-  '.tla-pane-row-ts{font-size:10px;color:var(--ui-text-quaternary);}',
-  '.tla-pane-foot{font-size:9px;color:var(--ui-text-quaternary);margin-top:auto;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary);}',
-  // Multi-placement adaptation (2026-08-13): the pane is registered with
-  // default dock right (300px column), but users can drag it anywhere — a
-  // bottom strip, a widened zone, another monitor. `container-type:
-  // inline-size` on .tla-pane-root makes these @container queries track the
-  // pane's ACTUAL width, so the widget always renders sensibly no matter
-  // where it lands:
-  //   <560px  → compact single column (default right dock)
-  //   >=560px → two-column row grid + card shares the row (bottom/wide docks)
-  '@container (min-width: 560px){',
-  '.tla-pane-root .tla-pane-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}',
-  '.tla-pane-root .tla-pane-last{flex-wrap:nowrap;}',
-  '.tla-pane-root .tla-pane-last .tla-pane-ts{width:auto;margin-left:auto;}',
-  '.tla-pane-root .tla-pane-price{flex-wrap:nowrap;gap:12px;}',
-  '}',
-  // 0.2.11: Tab bar + watchlist mini-charts
-  '.tla-tabs{display:flex;gap:2px;padding:4px 0 8px;border-bottom:1px solid var(--ui-stroke-secondary);}',
-  '.tla-tab-btn{background:transparent;border:1px solid transparent;border-radius:6px 6px 0 0;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--ui-text-secondary);}',
-  '.tla-tab-btn:hover{border-color:var(--ui-stroke-secondary);color:var(--ui-text-primary);}',
-  '.tla-tab-btn.tla-tab-active{background:var(--ui-panel);border-color:var(--ui-stroke-secondary);color:var(--ui-accent,#4c9aff);}',
-  '.tla-watchlist-root{border:1px solid var(--ui-stroke-secondary);border-radius:8px;}',
-  '.tla-watchlist-header{padding:6px 10px;font-size:11px;font-weight:600;color:var(--ui-text-tertiary);border-bottom:1px solid var(--ui-stroke-secondary);}',
-  '.tla-watchlist-rows{display:flex;flex-direction:column;}',
-  '.tla-watchlist-row{display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:11px;border-bottom:1px solid var(--ui-stroke-secondary);}',
-  '.tla-watchlist-cell{font-size:11px;font-variant-numeric:tabular-nums;}',
-  '.tla-watchlist-sym{font-weight:700;color:var(--ui-text-primary);min-width:70px;}',
-  '.tla-watchlist-dir{min-width:50px;}',
-  '.tla-watchlist-price{min-width:80px;text-align:right;}',
-  '.tla-watchlist-levels{color:var(--ui-text-tertiary);font-size:9px;}',
-  '.tla-watchlist-regime{font-size:9px;font-weight:600;}',
-  '.tla-watchlist-chart{width:140px;height:60px;background:rgba(0,0,0,0.03);border-radius:4px;position:relative;overflow:hidden;}',
-  '.tla-watchlist-chart-pending{background:rgba(0,0,0,0.03);}',
-  '.tla-watchlist-chart-loaded{background:transparent;}',
-  '.tla-watchlist-chart-empty{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--ui-text-tertiary);font-size:10px;}',
-  '.tla-watchlist-svg-chart{display:block;width:100%;height:100%;}',
-  '.tla-watchlist-svg-empty{opacity:0.5;}',
-  '.tla-tv-chart-card{padding:12px 16px;}',
-  '.tla-tv-canvas-wrapper{width:100%;height:320px;position:relative;background:rgba(0,0,0,0.03);border-radius:6px;overflow:hidden;}',
-  '.tla-tv-pending{background:rgba(0,0,0,0.03);}',
-  '.tla-tv-ready{background:transparent;}',
-  '.tla-tv-svg-fallback{position:absolute;top:0;left:0;width:100%;height:100%;}',
-  '.tla-tv-iframe{width:100%;height:240px;border:none;background:rgba(0,0,0,0.03);}',
-  '.tla-watchlist-hint{padding-top:4px;}',
-].join('')
 
-function ensureStyle() {
-  let style = document.getElementById(STYLE_ID)
-  if (!style) {
-    style = document.createElement('style')
-    style.id = STYLE_ID
-    document.head.appendChild(style)
-  }
-  // Always refresh textContent — hot-reloads keep the OLD css otherwise and
-  // new classes silently never apply.
-  if (globalThis.__DAISY_INJECTED__ !== "talaria-style") {
-    const ds = document.getElementById('daisy-talaria-style')
-    if (!ds) { const d = document.createElement('style'); d.id = 'daisy-talaria-style'; d.textContent = DAISY_CSS; document.head.appendChild(d) }
-    globalThis.__DAISY_INJECTED__ = "talaria-style"
-  }
-  style.textContent = CSS
-}
+
 
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 // Adaptive price formatter: fewer decimals for large prices (XAU ~4095 → 2dp),
 // more for small prices (FX ~1.08 → 5dp).
-function fmtPrice(v) {
-  if (v == null || isNaN(Number(v))) return '—'
-  const n = Number(v)
-  const abs = Math.abs(n)
-  if (abs >= 1000) return n.toFixed(1)
-  if (abs >= 100) return n.toFixed(3)
-  if (abs >= 10) return n.toFixed(4)
-  return n.toFixed(5)
-}
 
-function StatCard({ title, value, sub, tone }) {
-  return React.createElement('div', { className: 'tla-card' },
-    React.createElement('h3', null, title),
-    React.createElement('div', {
-      className: cn('tla-value', tone === 'pos' ? 'tla-pos' : tone === 'neg' ? 'tla-neg' : ''),
-    }, value),
-    sub ? React.createElement('div', { className: 'tla-sub' }, sub) : null,
-  )
-}
+
+
 
 // ---------------------------------------------------------------------------
 // Renko brick chart — SVG bricks (up green / down red), price axis on the
 // right, brick-index axis on the bottom. Ported from the admin plugin.
 // ---------------------------------------------------------------------------
-const BRICK_W = 26
-const BRICK_GAP = 4
-const BRICK_STEP = BRICK_W + BRICK_GAP
-const BRICK_RIGHT_MARGIN = 66
-const BRICK_TOP_PAD = 18
-const BRICK_BOTTOM_PAD = 26
-const BRICK_LEFT_PAD = 6
-const MIN_BRICK_H = 5
 
-function brickGridLines(minP, maxP, target = 6) {
-  const range = maxP - minP
-  if (range <= 0) return [minP]
-  const raw = range / target
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
-  const norm = raw / mag
-  const step = norm <= 1 ? mag : norm <= 2 ? 2 * mag : norm <= 5 ? 5 * mag : 10 * mag
-  const lines = []
-  for (let p = Math.ceil(minP / step) * step; p <= maxP; p += step) lines.push(parseFloat(p.toPrecision(10)))
-  return lines
-}
 
-function brickStep(total, target = 8) {
-  if (total <= target) return 1
-  const raw = total / target
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
-  const norm = raw / mag
-  const step = norm <= 1 ? mag : norm <= 2 ? 2 * mag : norm <= 5 ? 5 * mag : 10 * mag
-  return Math.max(1, Math.round(step))
-}
 
-function fmtBrickPrice(p) {
-  const n = Number(p)
-  if (n == null || isNaN(n)) return '—'
-  // Full-value format (6dp → rstrip trailing zeros → keep ≥2dp): BTC 64900 →
-  // $64900.00, XAU 4072.5 → $4072.50, FX 1.137 → $1.137, XAG 57.0568 →
-  // $57.0568 (no magnitude-based truncation).
-  let s = n.toFixed(6).replace(/\.?0+$/, '')
-  if (!s.includes('.')) s += '.00'
-  else if (s.split('.')[1].length < 2) s = n.toFixed(2)
-  return '$' + s
-}
+
+
+
+
+
+
+
+
+
+
+
 
 // bricks: [{ open_price, close_price, direction }] ordered by brick_index asc.
 // levels: [{ label, price, color }] — horizontal reference lines (entry/sl/tp).
@@ -1507,180 +1524,24 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
 // enough, 0 → max scale axis, regime/sub text after the bar. Ported from the
 // admin plugin (same UX preferences).
 // ---------------------------------------------------------------------------
-function HBar({ data, height = 140, width = 640, format }) {
-  if (!data || !data.length) {
-    return React.createElement('div', { className: 'tla-hint' }, 'No data yet')
-  }
-  const rowH = 26
-  const gap = 8
-  const labelW = 56
-  const badgeW = 40
-  const valW = 50
-  const barMaxW = width - labelW - badgeW - valW - 16
-  const max = Math.max(...data.map((d) => Math.abs(d.value || 0)), 1)
-  const svgH = data.length * (rowH + gap) + 16
-  const rows = data.map((d, i) => {
-    const y = i * (rowH + gap)
-    const w = (Math.abs(d.value || 0) / max) * barMaxW
-    const color = d.color || ((d.value || 0) >= 0 ? 'var(--ui-accent, #4c9aff)' : 'var(--ui-danger, #ff5c5c)')
-    const badge = d.badge || ''
-    const badgeColor = badge === 'SELL' ? 'var(--ui-danger, #ff5c5c)' : 'var(--ui-accent, #4c9aff)'
-    const label = format ? format(d.value) : String(d.value)
-    // Put the value INSIDE the bar when it's wide enough; otherwise right
-    // after the bar end in the bar's color.
-    const inside = w >= 46
-    return React.createElement('g', { key: d.label },
-      React.createElement('text', {
-        x: 0, y: y + rowH - 10,
-        fontSize: 12,
-        fill: 'var(--ui-text-primary)',
-        fontWeight: 600,
-      }, d.label.length > 7 ? d.label.slice(0, 6) : d.label),
-      React.createElement('text', {
-        x: labelW, y: y + rowH - 10,
-        fontSize: 9,
-        fill: badgeColor,
-        fontWeight: 700,
-      }, badge),
-      React.createElement('rect', {
-        x: labelW + badgeW, y: y + 4, width: Math.max(w, 2), height: rowH - 8,
-        fill: color, rx: 2, opacity: 0.9,
-      }),
-      inside
-        ? React.createElement('text', {
-            x: labelW + badgeW + Math.max(w, 2) - 6, y: y + rowH - 10,
-            fontSize: 11,
-            fill: 'var(--ui-button-text,#fff)',
-            fontWeight: 700,
-            textAnchor: 'end',
-          }, label)
-        : React.createElement('text', {
-            x: labelW + badgeW + Math.max(w, 2) + 6, y: y + rowH - 10,
-            fontSize: 11,
-            fill: color,
-            fontWeight: 700,
-          }, label),
-      d.sub ? React.createElement('text', {
-        x: labelW + badgeW + barMaxW, y: y + rowH - 2,
-        fontSize: 9,
-        fill: 'var(--ui-text-quaternary)',
-        textAnchor: 'end',
-      }, d.sub.length > 18 ? d.sub.slice(0, 17) : d.sub) : null,
-    )
-  })
-  // Scale context: 0 → max axis + faint max reference line.
-  const axisY = svgH - 5
-  const scaleEls = [
-    React.createElement('line', {
-      key: 'ref',
-      x1: labelW + badgeW, x2: labelW + badgeW + barMaxW,
-      y1: axisY - 5, y2: axisY - 5,
-      stroke: 'var(--ui-stroke-secondary)',
-      strokeWidth: 1,
-    }),
-    React.createElement('text', {
-      key: 'z',
-      x: labelW + badgeW, y: axisY,
-      fontSize: 9,
-      fill: 'var(--ui-text-tertiary)',
-      textAnchor: 'start',
-    }, '0'),
-    React.createElement('text', {
-      key: 'mx',
-      x: labelW + badgeW + barMaxW, y: axisY,
-      fontSize: 9,
-      fill: 'var(--ui-text-tertiary)',
-      textAnchor: 'end',
-    }, format ? format(max) : String(max)),
-  ]
-  return React.createElement('div', null,
-    React.createElement('div', { className: 'tla-hint', style: { display: 'flex', gap: 16, marginBottom: 10, fontSize: 11 } },
-      React.createElement('span', null,
-        React.createElement('span', { style: { display: 'inline-block', width: 10, height: 10, background: 'var(--ui-accent, #4c9aff)', borderRadius: 2, marginRight: 5 } }),
-        'BUY'),
-      React.createElement('span', null,
-        React.createElement('span', { style: { display: 'inline-block', width: 10, height: 10, background: 'var(--ui-danger, #ff5c5c)', borderRadius: 2, marginRight: 5 } }),
-        'SELL'),
-    ),
-    React.createElement('svg', {
-      viewBox: `0 0 ${width} ${svgH}`,
-      width: '100%',
-      height: 'auto',
-      style: { display: 'block', maxHeight: 460 },
-    }, rows, scaleEls),
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Hot signals banner — live 'signal' broadcasts + seed from nt_sweep_result
 // (qualified, non-neutral, kelly present). 10-min TTL vs the newest signal,
 // sorted by kelly desc, ~5 shown. Hidden entirely when empty (returns null).
 // ---------------------------------------------------------------------------
-const HOT_TTL_MS = 10 * 60 * 1000 // 10 min window vs the newest signal
-const HOT_MAX = 5
+// 10 min window vs the newest signal
 
-function HotSignalsBanner({ signals }) {
-  const rows = signals || []
-  const newest = Math.max(...rows.map((s) => Date.parse(s.ts) || 0))
-  const cutoff = newest ? newest - HOT_TTL_MS : 0
-  const hot = rows
-    .filter((s) => newest && (Date.parse(s.ts) || 0) >= cutoff)
-    .sort((a, b) => Number(b.kelly || 0) - Number(a.kelly || 0))
-    .slice(0, HOT_MAX)
 
-  if (!hot.length) return null
 
-  return React.createElement('div', { className: 'tla-card tla-hot-card' },
-    React.createElement('h3', null, 'Hot signals'),
-    React.createElement('div', { className: 'tla-explainer' },
-      'The most recent qualified signals, ranked by effective Kelly — the trades the engine is most interested in right now. A chip = one signal for that symbol (buy/sell).'),
-    React.createElement('span', { className: 'tla-hot-ts' },
-      `as of ${new Date(newest).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${hot.length} in 10m window`),
-    React.createElement('div', { className: 'tla-hot' },
-      hot.map((h) => {
-        const sell = String(h.direction || '').toLowerCase() === 'sell'
-        const regimeLabel = fmtRegime(h.regime)
-        return React.createElement('div', {
-          key: h.symbol + (h.ts || ''),
-          className: cn('tla-hot-chip', sell ? 'tla-hot-sell' : 'tla-hot-buy'),
-        },
-          React.createElement('span', { className: 'tla-hot-sym' }, h.symbol),
-          React.createElement('span', { className: 'tla-hot-dir' }, sell ? 'Sell' : 'Buy'),
-          React.createElement('span', { className: 'tla-hot-kelly' }, `kelly ${Number(h.kelly || 0).toFixed(3)}`),
-          regimeLabel ? React.createElement('span', { className: 'tla-hot-regime', title: 'Market regime' }, regimeLabel) : null,
-        )
-      }),
-    ),
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Pager — daisyUI join pagination with active button (2026-08-08)
 // ---------------------------------------------------------------------------
 const PAGE_SIZE = 8
 
-function Pager({ page, pages, onChange }) {
-  if (!pages || pages <= 1) return null
-  const btns = []
-  for (let i = 1; i <= pages; i++) {
-    btns.push(React.createElement('button', {
-      key: 'pg' + i,
-      className: cn('dui-join-item', 'dui-btn', 'dui-btn-sm', i === page ? 'dui-btn-active' : ''),
-      onClick: () => onChange(i),
-    }, String(i)))
-  }
-  return React.createElement('div', { className: cn('dui-join', 'dui-join-horizontal'), style: { marginTop: 8, flexWrap: 'wrap' } },
-    React.createElement('button', {
-      className: cn('dui-join-item', 'dui-btn', 'dui-btn-sm'),
-      onClick: () => onChange(Math.max(1, page - 1)),
-    }, '«'),
-    ...btns,
-    React.createElement('button', {
-      className: cn('dui-join-item', 'dui-btn', 'dui-btn-sm'),
-      onClick: () => onChange(Math.min(pages, page + 1)),
-    }, '»'),
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Paper section — Precision Pro only. Live 'paper' broadcast events
@@ -1722,7 +1583,7 @@ function PaperSection({ positions, equity, events }) {
       ? React.createElement('div', { className: 'tla-hint' },
           'Paper portfolio data not available yet — the nt_paper_positions table or v_paper_equity view is not deployed (PGRST205). Live paper events will still appear here once the backend publishes them.')
       : null,
-    React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+    React.createElement('table', { className: cn('tla-table') },
       React.createElement('thead', null,
         React.createElement('tr', null,
           React.createElement('th', null, 'Type'),
@@ -1765,71 +1626,7 @@ function PaperSection({ positions, equity, events }) {
 // talaria-check; inline result shows ok / 401 / 404
 // ('claim service not deployed') states.
 // ---------------------------------------------------------------------------
-function ConnectTab({ config, onSave, checkPhase, checkMsg }) {
-  const [token, setToken] = React.useState(config.claim_token || '')
 
-  const save = () => {
-    // Service URL + anon key are embedded defaults — only the user's claim
-    // token is personal. (2026-08-10: Option A — hide the pre-filled fields.)
-    onSave({ claim_token: token.trim() })
-  }
-
-  const statusEls = []
-  if (checkPhase === 'running') {
-    statusEls.push(React.createElement('div', { key: 's', className: 'tla-hint', style: { marginTop: 8 } },
-      'Validating claim token against talaria-check…'))
-  } else if (checkPhase === 'not-deployed') {
-    statusEls.push(React.createElement('div', { key: 's', className: 'tla-err', style: { marginTop: 8 } },
-      'Claim service not deployed — the talaria-check Edge Function is not live on this project yet (404). The dashboard will unlock once the backend deploys it.'))
-  } else if (checkPhase === 'bad-token') {
-    statusEls.push(React.createElement('div', { key: 's', className: 'tla-err', style: { marginTop: 8 } },
-      `Claim token rejected — ${checkMsg || 'invalid, revoked or expired token'}. Re-mint a token from the Talaria portal.`))
-  } else if (checkPhase === 'error') {
-    statusEls.push(React.createElement('div', { key: 's', className: 'tla-err', style: { marginTop: 8 } },
-      checkMsg || 'Claim check failed'))
-  }
-
-  return React.createElement('div', { className: 'tla-root' },
-    React.createElement('div', { className: 'tla-header' },
-      React.createElement(TalariaMark, { size: 20 }),
-      React.createElement('span', null, 'Talaria · Connect')),
-    React.createElement('div', { className: 'tla-card' },
-      React.createElement('div', { className: 'tla-hint' },
-        'Enter the claim token from the Talaria portal. The token is validated against the talaria-check Edge Function (live subscription status, re-checked every 24h). The service connection is pre-configured.'),
-      React.createElement('div', { className: 'tla-field' },
-        React.createElement('label', null, 'Claim token'),
-        React.createElement('input', {
-          value: token,
-          type: 'password',
-          placeholder: 'paste claim token from the Talaria portal',
-          onChange: (e) => setToken(e.target.value),
-        })),
-      React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-        React.createElement('button', {
-          type: 'button',
-          className: 'tla-btn',
-          // Explicit inline style so the button ALWAYS renders as a solid
-          // clickable button — the daisyUI bundle has no theme layer here
-          // (--p/--b2 undefined), so dui-btn-primary's oklch background is
-          // invalid and the button can render as plain text. (2026-08-10)
-          style: {
-            background: 'var(--ui-accent,#4c9aff)',
-            color: 'var(--ui-button-text,#fff)',
-            border: 'none',
-            borderRadius: 6,
-            padding: '8px 16px',
-            fontSize: 12,
-            fontWeight: 600,
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-          },
-          onClick: save,
-        }, 'Save & Validate'),
-      ),
-      statusEls,
-    ),
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Status screens — subscription routing
@@ -1843,11 +1640,11 @@ function SubscribeScreen({ claim, onRetry }) {
       React.createElement('div', { className: 'tla-hint', style: { textAlign: 'center' } },
         `Your claim token is valid, but there is no active subscription for ${claim.plan_slug || 'your plan'}.`),
       url
-        ? React.createElement('a', { className: cn('tla-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm'), href: url, target: '_blank', rel: 'noreferrer' },
+        ? React.createElement('a', { className: cn('tla-btn'), href: url, target: '_blank', rel: 'noreferrer' },
             'Subscribe / pay')
         : React.createElement('div', { className: 'tla-hint', style: { textAlign: 'center' } },
             'No payment link available — subscribe from the Talaria portal.'),
-      React.createElement('button', { className: cn('tla-btn', 'tla-btn-secondary', 'dui-btn', 'dui-btn-ghost', 'dui-btn-sm'), onClick: onRetry },
+      React.createElement('button', { className: cn('tla-btn', 'tla-btn-secondary'), onClick: onRetry },
         'Re-check'),
       React.createElement('div', { className: 'tla-hint', style: { textAlign: 'center' } },
         'Subscription status re-checks automatically every 24h.'),
@@ -1862,7 +1659,7 @@ function WaitingScreen({ claim, onRetry }) {
       React.createElement('h3', null, 'Waiting for payment confirmation'),
       React.createElement('div', { className: 'tla-hint', style: { textAlign: 'center' } },
         `Your ${claim.plan_slug || ''} subscription is pending. Once the payment webhook confirms it, this screen unlocks automatically (re-checked every 24h).`),
-      React.createElement('button', { className: cn('tla-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm'), onClick: onRetry },
+      React.createElement('button', { className: cn('tla-btn'), onClick: onRetry },
         'Re-check now'),
     ),
   )
@@ -1878,11 +1675,11 @@ function PaywallScreen({ claim, onRetry }) {
       React.createElement('div', { className: 'tla-banner tla-banner-paywall', style: { width: '100%' } },
         `Your ${claim.plan_slug || ''} subscription is ${status} — renew to keep receiving signals.`),
       url
-        ? React.createElement('a', { className: cn('tla-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm'), href: url, target: '_blank', rel: 'noreferrer' },
+        ? React.createElement('a', { className: cn('tla-btn'), href: url, target: '_blank', rel: 'noreferrer' },
             'Renew / pay')
         : React.createElement('div', { className: 'tla-hint', style: { textAlign: 'center' } },
             'No payment link available — renew from the Talaria portal.'),
-      React.createElement('button', { className: cn('tla-btn', 'tla-btn-secondary', 'dui-btn', 'dui-btn-ghost', 'dui-btn-sm'), onClick: onRetry },
+      React.createElement('button', { className: cn('tla-btn', 'tla-btn-secondary'), onClick: onRetry },
         'Re-check'),
     ),
   )
@@ -1903,88 +1700,20 @@ function PaywallScreen({ claim, onRetry }) {
 //   2 up then 1 down             → 'pullback'
 //   strictly alternating         → 'chop'
 //   otherwise                    → 'neutral'
-function brickPattern(bricks) {
-  const dirs = (bricks || [])
-    .map((b) => String(b.direction || '').toLowerCase())
-    .filter((d) => d === 'up' || d === 'down')
-  const win = dirs.slice(-10)
-  if (win.length < 3) return 'neutral'
-  // 3 consecutive same-direction (any position in the window)
-  for (let i = 0; i + 2 < win.length; i++) {
-    if (win[i] === win[i + 1] && win[i + 1] === win[i + 2]) return '3-push'
-  }
-  // 2 up then 1 down (pullback after an up-push)
-  if (win.length >= 3 && win[win.length - 3] === 'up' && win[win.length - 2] === 'up' && win[win.length - 1] === 'down') {
-    return 'pullback'
-  }
-  // Strictly alternating = chop
-  let alt = true
-  for (let i = 1; i < win.length; i++) {
-    if (win[i] === win[i - 1]) { alt = false; break }
-  }
-  if (alt) return 'chop'
-  return 'neutral'
-}
+
 
 // Map a backend regime label to the sizing rule table. Mirrors the
 // MetaRegimeClassifier display logic (sizing_multiplier + aggressiveness).
 // Returns { mult, aggressiveness, tone } with tone 'pos'|'neg'|'warn'|undefined.
-const META_REGIME_TABLE = {
-  calm_trend: { mult: 1.0, aggressiveness: 'normal' },
-  choppy_range: { mult: 0.5, aggressiveness: 'patient' },
-  high_vol_breakout: { mult: 1.5, aggressiveness: 'aggressive' },
-  regime_transition: { mult: 0.3, aggressiveness: 'standby' },
-  risk_off: { mult: -1.0, aggressiveness: 'standby' },
-  funding_stress: { mult: -0.5, aggressiveness: 'standby' },
-  liquidity_drained: { mult: -0.3, aggressiveness: 'standby' },
-  strong_trend: { mult: 1.2, aggressiveness: 'normal' },
-  low_vol_range: { mult: 0.8, aggressiveness: 'patient' },
-  high_vol_chop: { mult: 0.6, aggressiveness: 'patient' },
-}
-function metaRegimeInfo(regimeLabel) {
-  const r = META_REGIME_TABLE[String(regimeLabel || '').trim()] || { mult: 1.0, aggressiveness: 'normal' }
-  let tone
-  if (r.mult <= 0) tone = 'neg'
-  else if (r.mult >= 1.5) tone = 'pos'
-  else if (r.mult < 1.0) tone = 'warn'
-  return { mult: r.mult, aggressiveness: r.aggressiveness, tone }
-}
+
+
 
 // Fit a 3-state (UP/DOWN/FLAT) Markov chain on the brick close prices and
 // compute P(UP after 3 steps) from the last state's row of the transition
 // matrix raised to the 3rd power (hand-rolled matrix multiply — no libs).
 // FLAT is a real state (|delta| <= 1e-4), not dropped. Returns
 // { pUp, pDown, n } or null when fewer than 10 closes.
-function markovUpProbability(closes) {
-  const cs = (closes || []).map(Number).filter((v) => isFinite(v))
-  if (cs.length < 10) return null
-  const EPS = 0.0001
-  const stateOf = (a, b) => {
-    const d = a - b
-    return Math.abs(d) <= EPS ? 2 : d > 0 ? 0 : 1
-  }
-  // Transition counts: T[from][to], states 0=UP 1=DOWN 2=FLAT
-  const T = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
-  for (let i = 2; i < cs.length; i++) {
-    T[stateOf(cs[i - 1], cs[i - 2])][stateOf(cs[i], cs[i - 1])] += 1
-  }
-  // Normalize rows; an unvisited state falls back to uniform transitions.
-  const P = T.map((row) => {
-    const s = row[0] + row[1] + row[2]
-    return s > 0 ? [row[0] / s, row[1] / s, row[2] / s] : [1 / 3, 1 / 3, 1 / 3]
-  })
-  const last = stateOf(cs[cs.length - 1], cs[cs.length - 2])
-  // v = e_last · P³  (row-vector × P, three times)
-  let v = P[last]
-  for (let step = 0; step < 3; step++) {
-    const nv = [0, 0, 0]
-    for (let j = 0; j < 3; j++) {
-      for (let k = 0; k < 3; k++) nv[k] += v[j] * P[j][k]
-    }
-    v = nv
-  }
-  return { pUp: v[0], pDown: v[1], n: cs.length }
-}
+
 
 // Wilson score lower bound at 95% confidence: clamp(centre − half, 0..1).
 function wilsonLower(n, wins) {
@@ -2048,19 +1777,7 @@ function computePValues(signalHealthRows) {
 // SizingEngine what-if: baseline = equity × kelly × regime mult, then a
 // drawdown clip ddClip = clamp(1 − dd/max_dd, 0.25, 1.0), capped at 5% of
 // equity. Returns { baseline, final, capHit, cap, ddClip }.
-function sizingWhatIf(equityUsd, effectiveKelly, regimeLabel, dd = 0.15) {
-  const eq = Number(equityUsd) > 0 ? Number(equityUsd) : 1000
-  const kelly = isFinite(Number(effectiveKelly)) && Number(effectiveKelly) > 0 ? Number(effectiveKelly) : 0
-  const reg = metaRegimeInfo(regimeLabel)
-  const baseline = eq * kelly * reg.mult
-  const maxDd = 0.15
-  const ddClip = Math.min(1, Math.max(0.25, 1 - dd / maxDd))
-  let final = baseline * ddClip
-  const cap = eq * 0.05
-  let capHit = false
-  if (final > cap) { final = cap; capHit = true }
-  return { baseline, final, capHit, cap, ddClip }
-}
+
 
 // ---------------------------------------------------------------------------
 // Talaria dashboard — hot-signal banner, kelly histogram, 10-brick renko
@@ -2348,7 +2065,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
           symbolList.map((s) =>
             React.createElement('button', {
               key: s,
-              className: cn('tla-brick-btn', 'dui-btn', 'dui-btn-sm', s === activeBrickSym ? 'tla-brick-btn-active' : ''),
+              className: cn('tla-brick-btn', s === activeBrickSym ? 'tla-brick-btn-active' : ''),
               onClick: () => setBrickSym(s),
             }, s),
           ),
@@ -2455,7 +2172,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
               'Signal health view not deployed yet (migration 110) — ' + signalHealth.error.message)
           : sigHealthRows.length === 0
             ? React.createElement('div', { className: 'tla-hint' }, 'No resolved signals yet — rows appear once the EOD resolver closes signals.')
-            : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+            : React.createElement('table', { className: cn('tla-table') },
                 React.createElement('thead', null,
                   React.createElement('tr', null,
                     React.createElement('th', null, 'Symbol'),
@@ -2504,7 +2221,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
           ? React.createElement('div', { className: 'tla-hint' }, 'Calibration view not deployed yet — ' + calib.error.message)
           : calibRows.length === 0
             ? React.createElement('div', { className: 'tla-hint' }, 'No calibration rows yet — resolved signals needed.')
-            : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+            : React.createElement('table', { className: cn('tla-table') },
                 React.createElement('thead', null,
                   React.createElement('tr', null,
                     React.createElement('th', null, 'Day'),
@@ -2527,8 +2244,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                       }, r.bias != null ? Number(r.bias).toFixed(3) : '—'),
                       React.createElement('td', null,
                         React.createElement('span', {
-                          className: cn('tla-badge',
-                            r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
+                          className: cn('tla-badge', r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
                         }, r.status || '—')),
                       // Raw bias (2026-08-23) — pre-enforcement model output, not
                       // muted by Bayesian-shrink enforcement. See
@@ -2539,8 +2255,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                       }, r.bias_raw != null ? Number(r.bias_raw).toFixed(3) : '—'),
                       React.createElement('td', null,
                         React.createElement('span', {
-                          className: cn('tla-badge',
-                            r.status_raw === 'OVERCONFIDENT' ? 'closed' : r.status_raw === 'UNDERCONFIDENT' ? 'opened' : ''),
+                          className: cn('tla-badge', r.status_raw === 'OVERCONFIDENT' ? 'closed' : r.status_raw === 'UNDERCONFIDENT' ? 'opened' : ''),
                         }, r.status_raw || '—')),
                     )
                   )),
@@ -2558,7 +2273,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
           ? React.createElement('div', { className: 'tla-hint' }, 'Comparison view not deployed yet — ' + vsOpt.error.message)
           : vsOptRows.length === 0
             ? React.createElement('div', { className: 'tla-hint' }, 'No comparison rows yet — check back after the engine resolves its first day of paper positions (the monthly aggregation needs ≥6 months of daily data).')
-            : React.createElement('table', { className: cn('tla-table', 'dui-table', 'dui-table-sm') },
+            : React.createElement('table', { className: cn('tla-table') },
                 React.createElement('thead', null,
                   React.createElement('tr', null,
                     React.createElement('th', null, 'Month'),
@@ -2900,11 +2615,11 @@ function UpgradeBanner({ latest, onDismiss }) {
       `Upgrade available · v${latest.version}`),
     React.createElement('span', null, 'New version with bug fixes + improvements.'),
     React.createElement('a',
-      { className: cn('tla-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm', 'tla-upgrade-actions'),
+      { className: cn('tla-btn', 'tla-upgrade-actions'),
         href: getDownloadUrl(latest), target: '_blank', rel: 'noreferrer', style: { fontSize: '11px', padding: '2px 8px', height: 'auto', minHeight: 'auto' } },
       'Download'),
     React.createElement('button',
-      { className: cn('dui-btn', 'dui-btn-ghost', 'dui-btn-sm', 'tla-upgrade-actions'),
+      { className: cn('tla-upgrade-actions'),
         onClick: onDismiss, style: { fontSize: '11px', padding: '2px 8px', height: 'auto', minHeight: 'auto', lineHeight: 1 } },
       'Dismiss'),
   )
@@ -3044,7 +2759,7 @@ const plugin = {
   name: 'Talaria',
   defaultEnabled: true,
   register(ctx) {
-    ensureStyle()
+    ensureStyle(STYLE_ID)
     ctx.registerMany([
       {
         id: 'page',
