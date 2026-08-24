@@ -1573,32 +1573,7 @@
       h('div', { className: 'tla-card' },
         h('h3', null, 'Calibration bias (7d)'),
         h('div', { className: 'tla-explainer' },
-          'Does predicted win rate match reality? OVERCONFIDENT = model predicted higher than delivered; UNDERCONFIDENT = wins more than predicted.'),
-        h('div', { className: 'tla-hint' }, 'last 10 rows'),
-        h(CalibTable, { rows: calib.data || [] })
-      ),
-      // Kelly by symbol — latest sweep (TABLE format, 2026-08-12 redesign).
-      h('div', { className: 'tla-card' },
-        h('h3', null, 'Kelly by symbol'),
-        h('div', { className: 'tla-explainer' },
-          'Latest signal per symbol. Table grouped by asset class, sorted by symbol. Effective Kelly = post-EV scaling fraction of the book the engine would risk (blue buy, red sell).'),
-        h(TalariaKellyTable, { sweeps: sweeps, symbols: symbols })
-      ),
-      // Signal health scoreboard
-      h('div', { className: 'tla-card' },
-        h('h3', null, 'Signal health scoreboard'),
-        h('div', { className: 'tla-explainer' },
-          '30-day resolved-signal record per symbol. Wilson LB = 95% lower confidence bound on true win rate.'),
-        signalHealth.error
-          ? h('div', { className: 'tla-hint' }, 'Signal health view not deployed yet (migration 110) — ' + signalHealth.error.message)
-          : h(SignalHealthTable, { rows: signalHealth.data || [] })
-      ),
-      // Calibration bias
-      h('div', { className: 'tla-card' },
-        h('h3', null, 'Calibration bias (7d)'),
-        h('div', { className: 'tla-explainer' },
-          'Does predicted win rate match reality? OVERCONFIDENT = model predicted higher than delivered; UNDERCONFIDENT = wins more than predicted.'),
-        h('div', { className: 'tla-hint' }, 'last 10 rows'),
+          'Does predicted win rate match reality? OVERCONFIDENT = model predicted higher than delivered; UNDERCONFIDENT = wins more than predicted. Smaller text below each bias shows the pre-enforcement model output and how much enforcement is masking the true model drift (Δ = raw − enforced; positive = hiding overconfidence).'),
         h(CalibTable, { rows: calib.data || [] })
       ),
       // Paper vs equal-weight — Precision Pro only (0.2.11, in Analysis tab)
@@ -1682,8 +1657,25 @@
             h('td', null, r.symbol || '—'),
             h('td', null, r.avg_predicted_p_win != null ? (Number(r.avg_predicted_p_win) * 100).toFixed(1) + '%' : '—'),
             h('td', null, r.realized_win_rate != null ? (Number(r.realized_win_rate) * 100).toFixed(1) + '%' : '—'),
-            h('td', { className: r.bias != null && Number(r.bias) > 0.10 ? '' : r.bias != null && Number(r.bias) < -0.10 ? '' : '' },
-              r.bias != null ? Number(r.bias).toFixed(3) : '—'),
+            h('td', { className: r.bias != null && Number(r.bias) > 0.10 ? 'tla-neg' : r.bias != null && Number(r.bias) < -0.10 ? 'tla-pos' : '' },
+              r.bias != null ? Number(r.bias).toFixed(3) : '—',
+              // Raw line — small text under the enforced value
+              r.bias_raw != null ? h('div', { className: 'tla-sm' },
+                'raw ' + Number(r.bias_raw).toFixed(3) + ' · Δ' + (r.bias != null ? (Number(r.bias_raw) - Number(r.bias) >= 0 ? '+' : '') + (Number(r.bias_raw) - Number(r.bias)).toFixed(3) : '—'))
+                : null,
+              // Raw status line — only when different from enforced
+              r.status_raw != null && r.status_raw !== r.status ? h('div', { className: 'tla-sm' }, 'raw: ' + r.status_raw) : null,
+            ),
+            h('td', null,
+              h('span', { className: 'tla-badge',
+                style: {
+                  background: r.status === 'OVERCONFIDENT' ? 'rgba(255,92,92,0.15)' : r.status === 'UNDERCONFIDENT' ? 'rgba(120,220,120,0.15)' : 'rgba(153,153,153,0.15)',
+                  color: r.status === 'OVERCONFIDENT' ? '#ff5c5c' : r.status === 'UNDERCONFIDENT' ? '#78dc78' : 'var(--ui-text-tertiary)',
+                } },
+                r.status || '—'),
+              // Raw status only when different
+              r.status_raw != null && r.status_raw !== r.status ? h('div', { className: 'tla-sm' }, 'raw: ' + r.status_raw) : null,
+            ),
             h('td', null,
               h('span', { className: 'tla-badge',
                 style: {

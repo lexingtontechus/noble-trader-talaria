@@ -2320,12 +2320,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
         sub: 'signals (' + (isPro ? 'pro' : 'scout') + ')' + (isPro ? ' + portfolio' : '') + ' · REST poll 60s',
         tone: wsState === 'open' ? 'pos' : undefined,
       }),
-      React.createElement(StatCard, {
-        title: 'Qualified signals',
-        value: String(signalStore.qualifiedCount60m || hotWindowCount || 0),
-        sub: 'qualified signals in the last 60m (shared count with widget + chip + toast)',
       }),
-    ),
     // 0.2.11: Tab bar — Market (live per-symbol) | Analysis (historical/aggregate)
     React.createElement('div', { className: 'tla-tabs' },
       React.createElement('button', {
@@ -2512,42 +2507,40 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                     React.createElement('th', null, 'Predicted'),
                     React.createElement('th', null, 'Realized'),
                     React.createElement('th', null, 'Bias'),
-                    React.createElement('th', null, 'Status'),
-                    React.createElement('th', null, 'Bias (raw)'),
-                    React.createElement('th', null, 'Status (raw)'))),
+                    React.createElement('th', null, 'Status'))),
                 React.createElement('tbody', null,
-                  calibRows.map((r, i) => (
-                    React.createElement('tr', { key: (r.day || '') + (r.symbol || '') + i },
+                  calibRows.map((r, i) => {
+                    const bias = r.bias != null ? Number(r.bias) : null
+                    const biasRaw = r.bias_raw != null ? Number(r.bias_raw) : null
+                    const delta = bias != null && biasRaw != null ? (biasRaw - bias) : null
+                    const biasCls = bias != null && bias > 0.10 ? 'tla-neg' : bias != null && bias < -0.10 ? 'tla-pos' : ''
+                    const rawInfo = biasRaw != null
+                      ? React.createElement('div', { className: 'tla-sm' },
+                          'raw ' + biasRaw.toFixed(3) + ' · Δ' + (delta != null ? (delta >= 0 ? '+' : '') + delta.toFixed(3) : '—'))
+                      : null
+                    const rawStatusInfo = r.status_raw != null && r.status_raw !== r.status
+                      ? React.createElement('div', { className: 'tla-sm' }, 'raw: ' + r.status_raw)
+                      : null
+                    return React.createElement('tr', { key: (r.day || '') + (r.symbol || '') + i },
                       React.createElement('td', { className: 'tla-sm' }, String(r.day || '').slice(0, 10)),
                       React.createElement('td', null, r.symbol || '—'),
                       React.createElement('td', null, r.avg_predicted_p_win != null ? (Number(r.avg_predicted_p_win) * 100).toFixed(1) + '%' : '—'),
                       React.createElement('td', null, r.realized_win_rate != null ? (Number(r.realized_win_rate) * 100).toFixed(1) + '%' : '—'),
-                      React.createElement('td', {
-                        className: r.bias != null && Number(r.bias) > 0.10 ? 'tla-neg' : r.bias != null && Number(r.bias) < -0.10 ? 'tla-pos' : '',
-                      }, r.bias != null ? Number(r.bias).toFixed(3) : '—'),
+                      React.createElement('td', { className: biasCls },
+                        bias != null ? bias.toFixed(3) : '—',
+                        rawInfo),
                       React.createElement('td', null,
                         React.createElement('span', {
                           className: cn('tla-badge',
                             r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
-                        }, r.status || '—')),
-                      // Raw bias (2026-08-23) — pre-enforcement model output, not
-                      // muted by Bayesian-shrink enforcement. See
-                      // noble-trader-fastapi-backend migration 119 +
-                      // worklog/20260823_calibration_bias_panel_raw_vs_enforced_mismatch.md.
-                      React.createElement('td', {
-                        className: r.bias_raw != null && Number(r.bias_raw) >= 0.30 ? 'tla-neg' : r.bias_raw != null && Number(r.bias_raw) <= -0.20 ? 'tla-pos' : '',
-                      }, r.bias_raw != null ? Number(r.bias_raw).toFixed(3) : '—'),
-                      React.createElement('td', null,
-                        React.createElement('span', {
-                          className: cn('tla-badge',
-                            r.status_raw === 'OVERCONFIDENT' ? 'closed' : r.status_raw === 'UNDERCONFIDENT' ? 'opened' : ''),
-                        }, r.status_raw || '—')),
+                        }, r.status || '—'),
+                        rawStatusInfo),
                     )
-                  )),
+                  })),
                 ),
               ),
         React.createElement('div', { className: 'tla-hint' },
-          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. "(raw)" columns show the pre-enforcement model output, which enforcement may have since shrunk toward calibrated.'),
+          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. "raw" text below each bias shows the pre-enforcement model output; Δ = how much enforcement is masking the true model drift (positive = hiding overconfidence).'),
       ),
       // Paper vs equal-weight — Precision Pro only
       isPro ? React.createElement('div', { className: 'tla-card' },
