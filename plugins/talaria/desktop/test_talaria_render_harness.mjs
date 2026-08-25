@@ -161,15 +161,17 @@ globalThis.fetch = async (url) => {
     return { status: 200, ok: true, text: () => Promise.resolve('<html><body>TV widget</body></html>') }
   }
   // Phase 2: GitHub Releases API mock for version check banner (2026-08-20)
+  // Mocked "latest" bumped to v0.2.17 (2026-08-24) — deployed PLUGIN_VERSION is now
+  // 0.2.16, so the mock must stay strictly ahead for the upgrade-banner scenario below.
   if (u.includes('github.com/repos/lexingtontechus/noble-trader-talaria/releases/latest')) {
     return jsonResp({
-      tag_name: 'v0.2.15',
-      name: 'v0.2.15',
+      tag_name: 'v0.2.17',
+      name: 'v0.2.17',
       body: 'Phase 2 upgrade banner release notes.',
-      html_url: 'https://github.com/lexingtontechus/noble-trader-talaria/releases/tag/v0.2.15',
+      html_url: 'https://github.com/lexingtontechus/noble-trader-talaria/releases/tag/v0.2.17',
       prerelease: false,
       assets: [
-        { name: 'talaria-plugin-v0.2.15.zip', browser_download_url: 'https://github.com/lexingtontechus/noble-trader-talaria/releases/download/v0.2.15/talaria-plugin-v0.2.15.zip' },
+        { name: 'talaria-plugin-v0.2.17.zip', browser_download_url: 'https://github.com/lexingtontechus/noble-trader-talaria/releases/download/v0.2.17/talaria-plugin-v0.2.17.zip' },
       ],
     })
   }
@@ -620,7 +622,7 @@ stub.reset()
 stub.setRenderFn(() => pane.render())
 stub.renderOnce()
 walk(stub.getLatestRoot(), paneFootAcc)
-assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.14')), 'pane footer shows plugin version v0.2.14')
+assert(paneFootAcc.texts.some((x) => x.includes('Talaria v0.2.16')), 'pane footer shows plugin version v0.2.16')
 
 // Display order + no-duplication (2026-08-11, user: "most recent at top"):
 // the pane must render newest-first and NEVER show the same signal twice
@@ -737,7 +739,7 @@ assert(acc.texts.some((x) => x.includes('Talaria · Noble Trading App')), 'dashb
 
 // Phase 2: in-plugin upgrade banner (2026-08-20) — the checkForUpdates()
 // useEffect fetches the GitHub Releases API (mocked above) and stores the
-// latest release. The mock returns v0.2.15 > deployed PLUGIN_VERSION 0.2.14,
+// latest release. The mock returns v0.2.17 > deployed PLUGIN_VERSION 0.2.16,
 // so the UpgradeBanner should render after a second flush + re-render.
 // The harness React stub fires useEffect on mount, but the async .then()
 // chain needs a flush cycle to resolve before setState triggers a re-render.
@@ -746,7 +748,7 @@ stub.renderOnce()
 const upgradeAcc = { texts: [], classes: [] }
 walk(stub.getLatestRoot(), upgradeAcc)
 assert(upgradeAcc.classes.some((c) => c.includes('tla-banner-upgrade')), 'upgrade banner renders when latest release is newer than PLUGIN_VERSION')
-assert(upgradeAcc.texts.some((x) => x.includes('Upgrade available · v0.2.15')), 'upgrade banner shows latest release tag (v0.2.15)')
+assert(upgradeAcc.texts.some((x) => x.includes('Upgrade available · v0.2.17')), 'upgrade banner shows latest release tag (v0.2.17)')
 assert(upgradeAcc.texts.some((x) => x.includes('Download')), 'upgrade banner has a Download button (links to GitHub release zip)')
 assert(upgradeAcc.texts.some((x) => x.includes('Dismiss')), 'upgrade banner has a Dismiss button (per-version localStorage)')
 assert(hasText('Hot signals'), 'hot-signal banner + stat render')

@@ -52,12 +52,66 @@ import { cn, host, ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
 //   - the 20 byte-identical functions copied verbatim;
 //   - the 6 drifted functions unified to the talaria SUPERTSET variant
 //     (additive: more params/defaults) which is a strict superset admin can consume.
-(function () {
-'use strict'
+//
+// NOT wrapped in an IIFE: this content is concatenated directly into each
+// plugin.js's top-level module scope, ahead of the per-plugin body, so the
+// body can call these functions/consts by bare name. An IIFE wrapper here
+// would scope every declaration to itself, making them invisible to the
+// body (confirmed 2026-08-24: this exact regression broke both plugins —
+// every one of these functions was unreachable, throwing "X is not defined"
+// the instant register() ran).
 
-const AGGRESSION_FRIENDLY = { aggressive: 'Aggressive', moderate: 'Moderate', conservative: 'Conservative' }
-const REGIME_FRIENDLY = { bull: '🐂 Bull', bear: '🐻 Bear', neutral: '➖ Neutral' }
-const META_REGIME_TABLE = { strong_bull: 'strong-bull', strong_bear: 'strong-bear' }
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip — the 2026-08-24
+// consolidation truncated this to 3 generic keys (aggressive/moderate/conservative), but real
+// sweep rows carry aggression as passive/mid/aggressive (confirmed against the render harness's
+// own mock data), so those never matched and always fell back to generic title-casing.
+const AGGRESSION_FRIENDLY = { passive: '🎯 Patient', mid: '⚡ Normal', aggressive: '🔥 Aggressive' }
+// Restored 2026-08-24 from the same v0.2.10 backup — was truncated to 3 generic keys
+// (bull/bear/neutral), but real regime labels are composite (low_vol_strong_bull,
+// high_vol_bear, low_vol_chop, …) and never matched, so the friendly emoji labels never
+// actually appeared for real data (only for a bare "bull"/"bear"/"neutral" that nothing emits).
+const REGIME_FRIENDLY = {
+  low_vol_strong_bull: '🐂 Low-vol strong bull',
+  low_vol_bull: '🐂 Low-vol bull',
+  low_vol_strong_bear: '🐻 Low-vol strong bear',
+  low_vol_bear: '🐻 Low-vol bear',
+  high_vol_strong_bull: '🐂 High-vol strong bull',
+  high_vol_bull: '🐂 High-vol bull',
+  high_vol_strong_bear: '🐻 High-vol strong bear',
+  high_vol_bear: '🐻 High-vol bear',
+  low_vol_range: '↔️ Low-vol range',
+  high_vol_range: '↔️ High-vol range',
+  low_vol_chop: '🔀 Low-vol chop',
+  high_vol_chop: '🔀 High-vol chop',
+  low_vol_strong_trend: '📈 Low-vol strong trend',
+  high_vol_strong_trend: '📈 High-vol strong trend',
+  strong_trend: '📈 Strong trend',
+  range: '↔️ Range',
+  chop: '🔀 Chop',
+}
+// HOT_TTL_MS/HOT_MAX were already in build-plugins.py's SHARED_CONST list but never actually
+// declared here — a pre-existing gap from before the 2026-08-24 consolidation. Confirmed both are
+// genuinely used by the ORIGINAL HotSignalsBanner (see below) via the same v0.2.10 backup:
+// HOT_TTL_MS gates the "last 10m" window, HOT_MAX caps the chip list at the top 5 by Kelly.
+const HOT_TTL_MS = 10 * 60 * 1000
+const HOT_MAX = 5
+// Restored 2026-08-24 from the same v0.2.10 backup — the consolidation truncated this to 2 keys
+// mapping to plain slug strings ({ strong_bull: 'strong-bull', ... }), but metaRegimeInfo() (and
+// the Sizing-what-if panel that reads its return value) needs { mult, aggressiveness } per regime;
+// that shape existed here originally and was lost, which is what caused the Sizing-what-if crash
+// documented in worklog/20260824_scope_implementation_and_build_verification.md.
+const META_REGIME_TABLE = {
+  calm_trend: { mult: 1.0, aggressiveness: 'normal' },
+  choppy_range: { mult: 0.5, aggressiveness: 'patient' },
+  high_vol_breakout: { mult: 1.5, aggressiveness: 'aggressive' },
+  regime_transition: { mult: 0.3, aggressiveness: 'standby' },
+  risk_off: { mult: -1.0, aggressiveness: 'standby' },
+  funding_stress: { mult: -0.5, aggressiveness: 'standby' },
+  liquidity_drained: { mult: -0.3, aggressiveness: 'standby' },
+  strong_trend: { mult: 1.2, aggressiveness: 'normal' },
+  low_vol_range: { mult: 0.8, aggressiveness: 'patient' },
+  high_vol_chop: { mult: 0.6, aggressiveness: 'patient' },
+}
 
 function fmtPrice(v) {
   if (v == null || isNaN(Number(v))) return '—'
@@ -192,17 +246,34 @@ function aggregateToMonths(dailyRows, months) {
   }))
 }
 
-function sizingWhatIf(kelly, reg) {
-  const k = Number(kelly)
-  const r = Number(reg)
-  if (isNaN(k) || isNaN(r)) return { eq: 0, reg: 0 }
-  return { eq: Math.abs(k) * 1, reg: Math.abs(k) * r }
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip. The consolidation
+// replaced both this and metaRegimeInfo with a 2-arg/simple-shape pair that didn't match either
+// plugin's actual call site (sizingWhatIf(eqUsd, kellyIn, regimeLabel, portDd), reading
+// sizing.baseline/.final/.capHit) — this is the real fix for the Sizing-what-if crash a 2026-08-24
+// verification pass only null-guarded (see worklog/20260824_scope_implementation_and_build_verification.md).
+// SizingEngine what-if: baseline = equity × kelly × regime mult, then a drawdown clip
+// ddClip = clamp(1 − dd/max_dd, 0.25, 1.0), capped at 5% of equity.
+function sizingWhatIf(equityUsd, effectiveKelly, regimeLabel, dd = 0.15) {
+  const eq = Number(equityUsd) > 0 ? Number(equityUsd) : 1000
+  const kelly = isFinite(Number(effectiveKelly)) && Number(effectiveKelly) > 0 ? Number(effectiveKelly) : 0
+  const reg = metaRegimeInfo(regimeLabel)
+  const baseline = eq * kelly * reg.mult
+  const maxDd = 0.15
+  const ddClip = Math.min(1, Math.max(0.25, 1 - dd / maxDd))
+  let final = baseline * ddClip
+  const cap = eq * 0.05
+  let capHit = false
+  if (final > cap) { final = cap; capHit = true }
+  return { baseline, final, capHit, cap, ddClip }
 }
 
-function metaRegimeInfo(reg) {
-  if (!reg) return null
-  const r = String(reg).toLowerCase()
-  return { regime: r, label: REGIME_FRIENDLY[r] || r, meta: META_REGIME_TABLE[r] }
+function metaRegimeInfo(regimeLabel) {
+  const r = META_REGIME_TABLE[String(regimeLabel || '').trim()] || { mult: 1.0, aggressiveness: 'normal' }
+  let tone
+  if (r.mult <= 0) tone = 'neg'
+  else if (r.mult >= 1.5) tone = 'pos'
+  else if (r.mult < 1.0) tone = 'warn'
+  return { mult: r.mult, aggressiveness: r.aggressiveness, tone }
 }
 
 function saveConfig(cfg) {
@@ -239,18 +310,25 @@ function useConfig(defaults) {
   return [config, update]
 }
 
+// NOTE (2026-08-24 verification pass): both functions below were missing the
+// PostgREST '/rest/v1/' path prefix entirely — fetchSupabase built URLs like
+// 'https://<project>.supabase.co' + 'nt_sweep_result' (no separator at all,
+// concatenating straight into '.cont_sweep_result'), so every useSupabaseData
+// call in both plugins silently failed. Confirmed via the talaria render
+// harness ("Unexpected fetch URL: https://...supabase.cont_sweep_result").
 function fetchSupabase(config, path, params) {
   const base = config.supabase_url
   const qs = new URLSearchParams(params || {}).toString()
-  const url = qs ? base + path + '?' + qs : base + path
+  const url = qs ? base + '/rest/v1/' + path + '?' + qs : base + '/rest/v1/' + path
   return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key } })
     .then((r) => r.json())
 }
 
 function fetchSupabaseCount(config, table, filter) {
-  const url = config.supabase_url + '/' + table + '?select=count'
-  return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key } })
-    .then((r) => r.json())
+  const qs = new URLSearchParams(Object.assign({ select: 'count' }, filter || {})).toString()
+  const url = config.supabase_url + '/rest/v1/' + table + '?' + qs
+  return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key, Prefer: 'count=exact' } })
+    .then((r) => Number(r.headers.get('content-range')?.split('/')?.[1] || r.headers.get('x-total-count') || 0))
 }
 
 function useSupabaseData(config, table, params, enabled, pollMs) {
@@ -355,67 +433,321 @@ function LineChart({ points, color }) {
   )
 }
 
-function HotSignalsBanner({ rows, newest, cutoff }) {
-  const hot = rows.filter((r) => newest.has(r.symbol))
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip (talaria variant) and
+// noble-trader-admin-plugin-v0.2.10.zip (admin variant) \u2014 these were two genuinely DIFFERENT
+// pre-refactor implementations (admin's own nta-*-classed version reads the raw hook-result
+// object and filters `qualified` itself; talaria's tla-*-classed version takes an
+// already-filtered plain array and uses `direction` not `signal`), not just a CSS-prefix
+// difference. The 2026-08-24 consolidation replaced BOTH with a single { rows, newest, cutoff }
+// shape neither call site (both still pass { signals }, unchanged) ever supplied, crashing on the
+// first render. Branches on `variant` the same way ConnectTab does rather than forking the
+// component.
+function HotSignalsBanner({ signals, variant }) {
+  if (variant === 'admin') {
+    const rows = (signals && signals.data || []).filter((s) => s.qualified)
+    const newest = Math.max(...rows.map((r) => Date.parse(r.ts) || 0))
+    const cutoff = newest ? newest - HOT_TTL_MS : 0
+    const hot = rows
+      .filter((r) => newest && (Date.parse(r.ts) || 0) >= cutoff)
+      .map((r) => ({
+        symbol: r.symbol,
+        signal: r.signal,
+        kelly: Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0,
+        regime: r.regime,
+        ts: r.ts,
+      }))
+      .sort((a, b) => b.kelly - a.kelly)
+      .slice(0, HOT_MAX)
+
+    if (!hot.length) return null
+
+    return React.createElement('div', { className: 'nta-card nta-hot-card' },
+      React.createElement('h3', null, 'Hot signals'),
+      React.createElement('div', { className: 'nta-explainer' },
+        'The most recent qualified signals, ranked by effective Kelly \u2014 the trades the engine is most interested in right now. A chip = one signal for that symbol (buy/sell), with the market regime it fired in.'),
+      React.createElement('span', { className: 'nta-hot-ts' },
+        `as of ${new Date(newest).toISOString().slice(0, 19).replace('T', ' ')} UTC \u00B7 ${hot.length} in 10m window`),
+      React.createElement('div', { className: 'nta-hot' },
+        hot.map((h) => {
+          const regimeLabel = fmtRegime(h.regime)
+          return React.createElement('div', {
+            key: h.symbol + h.ts,
+            className: cn('nta-hot-chip', h.signal === 'sell' ? 'nta-hot-sell' : 'nta-hot-buy'),
+          },
+            React.createElement('span', { className: 'nta-hot-sym' }, h.symbol),
+            React.createElement('span', { className: 'nta-hot-dir' }, h.signal === 'sell' ? 'Sell' : 'Buy'),
+            React.createElement('span', { className: 'nta-hot-kelly' }, `kelly ${h.kelly.toFixed(3)}`),
+            regimeLabel ? React.createElement('span', { className: 'nta-hot-regime', title: 'Market regime' }, regimeLabel) : null,
+          )
+        }),
+      ),
+    )
+  }
+
+  const rows = signals || []
+  const newest = Math.max(...rows.map((s) => Date.parse(s.ts) || 0))
+  const cutoff = newest ? newest - HOT_TTL_MS : 0
+  const hot = rows
+    .filter((s) => newest && (Date.parse(s.ts) || 0) >= cutoff)
+    .sort((a, b) => Number(b.kelly || 0) - Number(a.kelly || 0))
+    .slice(0, HOT_MAX)
+
   if (!hot.length) return null
-  return React.createElement('div', { className: 'tla-hot-banner' },
-    React.createElement('span', { className: 'tla-hot-badge' }, '\uD83D\uDD25 Hot'),
-    React.createElement('span', { className: 'tla-hot-count' }, hot.length + ' live update' + (hot.length > 1 ? 's' : ''))
+
+  return React.createElement('div', { className: 'tla-card tla-hot-card' },
+    React.createElement('h3', null, 'Hot signals'),
+    React.createElement('div', { className: 'tla-explainer' },
+      'The most recent qualified signals, ranked by effective Kelly \u2014 the trades the engine is most interested in right now. A chip = one signal for that symbol (buy/sell).'),
+    React.createElement('span', { className: 'tla-hot-ts' },
+      `as of ${new Date(newest).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} \u00B7 ${hot.length} in 10m window`),
+    React.createElement('div', { className: 'tla-hot' },
+      hot.map((h) => {
+        const sell = String(h.direction || '').toLowerCase() === 'sell'
+        const regimeLabel = fmtRegime(h.regime)
+        return React.createElement('div', {
+          key: h.symbol + (h.ts || ''),
+          className: cn('tla-hot-chip', sell ? 'tla-hot-sell' : 'tla-hot-buy'),
+        },
+          React.createElement('span', { className: 'tla-hot-sym' }, h.symbol),
+          React.createElement('span', { className: 'tla-hot-dir' }, sell ? 'Sell' : 'Buy'),
+          React.createElement('span', { className: 'tla-hot-kelly' }, `kelly ${Number(h.kelly || 0).toFixed(3)}`),
+          regimeLabel ? React.createElement('span', { className: 'tla-hot-regime', title: 'Market regime' }, regimeLabel) : null,
+        )
+      }),
+    ),
   )
 }
 
-function ConnectTab({ config, onSave, checkPhase, checkMsg }) {
+// ConnectTab \u2014 shared between admin and talaria, which need genuinely different
+// forms: admin connects with its own Supabase URL/anon key; talaria (Option A,
+// 2026-08-10) embeds those as service defaults and only ever asks for a claim
+// token. Branches on `variant: 'talaria'` rather than forking the component,
+// so the two stay reconciled in one place. Restores the claim_token field that
+// was dropped entirely in the 2026-08-24 shared-logic consolidation \u2014 talaria
+// users who needed to enter/replace a token had no UI path to do so (the
+// render harness's own "no config" scenario already asserted this exact
+// contract \u2014 'Claim token' field, 'Save & Validate' button, Supabase fields
+// hidden, 'pre-configured' hint \u2014 it just never matched the shipped markup).
+function ConnectTab({ config, onSave, checkPhase, checkMsg, variant }) {
+  const errored = checkPhase === 'bad-token' || checkPhase === 'not-deployed' || checkPhase === 'error'
+
+  if (variant === 'talaria') {
+    const [local, setLocal] = React.useState({ claim_token: config.claim_token || '' })
+    const save = () => onSave(local)
+    return React.createElement('div', { className: 'tla-root' },
+      React.createElement('div', { className: 'tla-header' },
+        TalariaMark ? React.createElement(TalariaMark, { size: 20 }) : null,
+        React.createElement('span', null, 'Talaria \u00b7 Connect')),
+      React.createElement('div', { className: 'tla-card' },
+        React.createElement('div', { className: 'tla-hint' },
+          'Service connection is pre-configured \u2014 just enter your claim token.'),
+        React.createElement('label', { className: 'tla-hint' }, 'Claim token'),
+        React.createElement('input', {
+          className: 'tla-input', type: 'password', placeholder: 'Claim token',
+          value: local.claim_token,
+          onInput: (e) => setLocal({ claim_token: e.target.value }),
+        }),
+        errored ? React.createElement('div', { className: 'tla-row' }, checkMsg || 'Could not validate claim token.') : null,
+        React.createElement('button', {
+          className: cn('tla-btn tla-btn-primary tla-btn-sm', checkPhase === 'running' ? 'tla-btn-disabled' : ''),
+          onClick: save, disabled: checkPhase === 'running',
+        }, 'Save & Validate'),
+      ),
+    )
+  }
+
+  // admin (default) \u2014 restored 2026-08-24 from noble-trader-admin-plugin-v0.2.10.zip (a
+  // pre-Batch-A backup): heading, labeled fields, and the "Test connection" button (pings
+  // nt_signal_sim directly) were replaced during the 2026-08-24 consolidation with a
+  // placeholder-only, unlabeled, tla-*-classed form that (a) never said "Connect" anywhere,
+  // which is what a stale render-harness assertion (findH3(out, 'Connect')) was actually
+  // catching, and (b) used talaria's CSS prefix instead of admin's own nta-*/dui-* classes.
   const [local, setLocal] = React.useState({ supabase_url: config.supabase_url || '', supabase_key: config.supabase_key || '' })
-  const testing = checkPhase === 'checking'
+  const [testing, setTesting] = React.useState(false)
+  const [testResult, setTestResult] = React.useState(null)
   const save = () => onSave(local)
-  return React.createElement('div', { className: 'tla-card' },
-    React.createElement('h3', null, 'Supabase'),
-    React.createElement('input', {
-      className: 'tla-input', type: 'url', placeholder: 'supabase_url',
-      value: local.supabase_url,
-      onInput: (e) => setLocal({ ...local, supabase_url: e.target.value }),
-    }),
-    React.createElement('input', {
-      className: 'tla-input', type: 'password', placeholder: 'supabase_key',
-      value: local.supabase_key,
-      onInput: (e) => setLocal({ ...local, supabase_key: e.target.value }),
-    }),
-    testing ? React.createElement('div', { className: 'tla-row' }, checkMsg || 'Checking\u2026') : null,
-    React.createElement('button', {
-      className: cn('tla-btn tla-btn-primary tla-btn-sm', testing ? 'tla-btn-disabled' : ''),
-      onClick: save, disabled: testing,
-    }, 'Save & Connect'),
-    testing ? React.createElement('button', {
-      className: cn('tla-btn tla-btn-secondary tla-btn-sm', 'tla-btn-disabled'),
-      onClick: () => saveConfig(local), disabled: true,
-    }, 'Re-check') : null
+  const testConnection = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const base = (local.supabase_url || '').replace(/\/+$/, '')
+      const resp = await fetch(`${base}/rest/v1/nt_signal_sim?select=signal_id&limit=1`, {
+        headers: { apikey: local.supabase_key, Authorization: `Bearer ${local.supabase_key}`, Accept: 'application/json' },
+      })
+      if (!resp.ok) setTestResult({ ok: false, msg: `${resp.status} ${resp.statusText}` })
+      else setTestResult({ ok: true, msg: 'Connected \u2014 Supabase reachable' })
+    } catch (err) {
+      setTestResult({ ok: false, msg: String((err && err.message) || err) })
+    } finally {
+      setTesting(false)
+    }
+  }
+  return React.createElement('div', { className: 'nta-root' },
+    React.createElement('div', { className: 'nta-card' },
+      React.createElement('h3', null, 'Noble Trader Admin \u2014 Connect'),
+      React.createElement('div', { className: 'nta-hint' },
+        'Enter the Supabase project URL and the PUBLIC anon key. The plugin reads EOD signal-lookback + paper-portfolio data DIRECTLY from Supabase via scoped read-only RLS \u2014 no backend, no service key, safe for multi-user install.'),
+      React.createElement('div', { className: 'nta-field' },
+        React.createElement('label', null, 'Supabase URL'),
+        React.createElement('input', {
+          value: local.supabase_url, placeholder: 'https://<project>.supabase.co',
+          onInput: (e) => setLocal({ ...local, supabase_url: e.target.value }),
+        })),
+      React.createElement('div', { className: 'nta-field' },
+        React.createElement('label', null, 'Supabase anon/public key'),
+        React.createElement('input', {
+          value: local.supabase_key, type: 'password', placeholder: 'sb_publishable_...',
+          onInput: (e) => setLocal({ ...local, supabase_key: e.target.value }),
+        })),
+      errored ? React.createElement('div', { className: 'nta-err' }, checkMsg || 'Could not connect.') : null,
+      React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+        React.createElement('button', {
+          className: cn('nta-btn', 'dui-btn', 'dui-btn-primary', 'dui-btn-sm'), onClick: save,
+        }, 'Save & Connect'),
+        React.createElement('button', {
+          className: cn('nta-btn', 'dui-btn', 'dui-btn-ghost', 'dui-btn-sm'), onClick: testConnection, disabled: testing,
+        }, testing ? 'Testing\u2026' : 'Test connection'),
+      ),
+      testResult ? React.createElement('div', {
+        className: testResult.ok ? 'nta-ok' : 'nta-err', style: { marginTop: 8 },
+      }, testResult.msg) : null,
+    ),
   )
 }
 
 // ensureStyle — UNIFIED (B2-1). Moved here from per-plugin bodies to eliminate
 // the document.head clobber drift: both plugins now call the SAME function with
 // their own STYLE_ID const. No more duplicate/overwritten <style> elements on
-// the shared Electron DOM. DAISY_CSS resolves from the closure (declared above
-// the IIFE in the concat).
-function ensureStyle(styleId) {
+// the shared Electron DOM. DAISY_CSS resolves from module top-level scope
+// (declared before this file's content in the concat).
+//
+// `customCss` param added 2026-08-24: the pre-Batch-A source had TWO separate
+// stylesheets per plugin — the vendored DAISY_CSS blob (own <style> tag) and a
+// per-plugin `const CSS = [...].join('')` of hand-written app classes
+// (.tla-card/.tla-pane-root/.nta-card/etc., injected into a SECOND <style>
+// tag). Batch A's CSS trim collapsed this down to a single DAISY_CSS-only
+// call, silently dropping every custom app class in the process (confirmed
+// against the pre-refactor noble-trader-admin-plugin-v0.2.10.zip backup and
+// noble-trader-talaria/talaria-plugin-v0.2.10.zip, both of which still define
+// them). Each plugin body now restores its own `CSS` template literal and
+// passes it here rather than reintroducing a second <style> tag.
+function ensureStyle(styleId, customCss) {
   let style = document.getElementById(styleId)
   if (!style) {
     style = document.createElement('style')
     style.id = styleId
     document.head.appendChild(style)
   }
-  style.textContent = DAISY_CSS
+  style.textContent = DAISY_CSS + (customCss || '')
 }
-})()
 
 
 
 
 
 
+// shared-logic.js — single source of truth for logic duplicated (and drifted)
+// between noble-trader-admin and talaria desktop plugins.
+//
+// Both plugin.js files are loaded by Electron as uncompiled ESM with NO imports
+// allowed beyond `react` / `react/jsx-runtime` / `@hermes/plugin-sdk`. Therefore
+// this file is NOT import()'d at runtime — it is TEXTUALLY CONCATENATED into
+// each plugin.js by scripts/build-plugins.py before the per-plugin body.
+//
+// Reconciliation policy (worklog/20260824):
+//   - the 20 byte-identical functions copied verbatim;
+//   - the 6 drifted functions unified to the talaria SUPERTSET variant
+//     (additive: more params/defaults) which is a strict superset admin can consume.
+//
+// NOT wrapped in an IIFE: this content is concatenated directly into each
+// plugin.js's top-level module scope, ahead of the per-plugin body, so the
+// body can call these functions/consts by bare name. An IIFE wrapper here
+// would scope every declaration to itself, making them invisible to the
+// body (confirmed 2026-08-24: this exact regression broke both plugins —
+// every one of these functions was unreachable, throwing "X is not defined"
+// the instant register() ran).
+
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip — the 2026-08-24
+// consolidation truncated this to 3 generic keys (aggressive/moderate/conservative), but real
+// sweep rows carry aggression as passive/mid/aggressive (confirmed against the render harness's
+// own mock data), so those never matched and always fell back to generic title-casing.
+// Restored 2026-08-24 from the same v0.2.10 backup — was truncated to 3 generic keys
+// (bull/bear/neutral), but real regime labels are composite (low_vol_strong_bull,
+// high_vol_bear, low_vol_chop, …) and never matched, so the friendly emoji labels never
+// actually appeared for real data (only for a bare "bull"/"bear"/"neutral" that nothing emits).
+// HOT_TTL_MS/HOT_MAX were already in build-plugins.py's SHARED_CONST list but never actually
+// declared here — a pre-existing gap from before the 2026-08-24 consolidation. Confirmed both are
+// genuinely used by the ORIGINAL HotSignalsBanner (see below) via the same v0.2.10 backup:
+// HOT_TTL_MS gates the "last 10m" window, HOT_MAX caps the chip list at the top 5 by Kelly.
+// Restored 2026-08-24 from the same v0.2.10 backup — the consolidation truncated this to 2 keys
+// mapping to plain slug strings ({ strong_bull: 'strong-bull', ... }), but metaRegimeInfo() (and
+// the Sizing-what-if panel that reads its return value) needs { mult, aggressiveness } per regime;
+// that shape existed here originally and was lost, which is what caused the Sizing-what-if crash
+// documented in worklog/20260824_scope_implementation_and_build_verification.md.
 
 
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip. The consolidation
+// replaced both this and metaRegimeInfo with a 2-arg/simple-shape pair that didn't match either
+// plugin's actual call site (sizingWhatIf(eqUsd, kellyIn, regimeLabel, portDd), reading
+// sizing.baseline/.final/.capHit) — this is the real fix for the Sizing-what-if crash a 2026-08-24
+// verification pass only null-guarded (see worklog/20260824_scope_implementation_and_build_verification.md).
+// SizingEngine what-if: baseline = equity × kelly × regime mult, then a drawdown clip
+// ddClip = clamp(1 − dd/max_dd, 0.25, 1.0), capped at 5% of equity.
 
+
+// NOTE (2026-08-24 verification pass): both functions below were missing the
+// PostgREST '/rest/v1/' path prefix entirely — fetchSupabase built URLs like
+// 'https://<project>.supabase.co' + 'nt_sweep_result' (no separator at all,
+// concatenating straight into '.cont_sweep_result'), so every useSupabaseData
+// call in both plugins silently failed. Confirmed via the talaria render
+// harness ("Unexpected fetch URL: https://...supabase.cont_sweep_result").
+
+
+// ConnectTab \u2014 shared between admin and talaria, which need genuinely different
+// forms: admin connects with its own Supabase URL/anon key; talaria (Option A,
+// 2026-08-10) embeds those as service defaults and only ever asks for a claim
+// token. Branches on `variant: 'talaria'` rather than forking the component,
+// so the two stay reconciled in one place. Restores the claim_token field that
+// was dropped entirely in the 2026-08-24 shared-logic consolidation \u2014 talaria
+// users who needed to enter/replace a token had no UI path to do so (the
+// render harness's own "no config" scenario already asserted this exact
+// contract \u2014 'Claim token' field, 'Save & Validate' button, Supabase fields
+// hidden, 'pre-configured' hint \u2014 it just never matched the shipped markup).
+
+// ensureStyle — UNIFIED (B2-1). Moved here from per-plugin bodies to eliminate
+// the document.head clobber drift: both plugins now call the SAME function with
+// their own STYLE_ID const. No more duplicate/overwritten <style> elements on
+// the shared Electron DOM. DAISY_CSS resolves from module top-level scope
+// (declared before this file's content in the concat).
+//
+// `customCss` param added 2026-08-24: the pre-Batch-A source had TWO separate
+// stylesheets per plugin — the vendored DAISY_CSS blob (own <style> tag) and a
+// per-plugin `const CSS = [...].join('')` of hand-written app classes
+// (.tla-card/.tla-pane-root/.nta-card/etc., injected into a SECOND <style>
+// tag). Batch A's CSS trim collapsed this down to a single DAISY_CSS-only
+// call, silently dropping every custom app class in the process (confirmed
+// against the pre-refactor noble-trader-admin-plugin-v0.2.10.zip backup and
+// noble-trader-talaria/talaria-plugin-v0.2.10.zip, both of which still define
+// them). Each plugin body now restores its own `CSS` template literal and
+// passes it here rather than reintroducing a second <style> tag.
+
+
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip (talaria variant) and
+// noble-trader-admin-plugin-v0.2.10.zip (admin variant) \u2014 these were two genuinely DIFFERENT
+// pre-refactor implementations (admin's own nta-*-classed version reads the raw useSupabaseData()
+// hook result and filters `qualified` itself; talaria's tla-*-classed version takes an
+// already-filtered plain array and uses `direction` not `signal`), not just a CSS-prefix
+// difference. The 2026-08-24 consolidation replaced BOTH with a single { rows, newest, cutoff }
+// shape neither call site (both still pass { signals }, unchanged) ever supplied, crashing on the
+// first render. Branches on `variant` the same way ConnectTab does rather than forking the
+// component.
+
+
+// HOT_TTL_MS/HOT_MAX were already in build-plugins.py's SHARED_CONST list but never actually
+// declared here — a pre-existing gap from before the 2026-08-24 consolidation. Confirmed both are
+// genuinely used by the ORIGINAL HotSignalsBanner (see below) via
+// noble-trader-talaria/talaria-plugin-v0.2.10.zip (a pre-refactor backup): HOT_TTL_MS gates the
+// "last 10m" window, HOT_MAX caps the chip list at the top 5 by Kelly.
 
 
 /**
@@ -478,7 +810,7 @@ const POSTHOG_API_HOST = 'https://us.i.posthog.com'
 //        re-renders even on re-seen (ts <= watermark) rows.
 // 0.2.13: (user correction 2026-08-19) fixed wrong workspace path in docs
 // 0.2.14: Phase 2 — in-plugin version check banner (upgrade notice via GitHub Releases API)
-const PLUGIN_VERSION = '0.2.15'
+const PLUGIN_VERSION = '0.2.16'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -499,11 +831,6 @@ const DEFAULT_ANON_KEY = 'sb_publishable_cYfseJa9z0qss0g_Y594wA_lXrWVBsa'
 // who silences v0.2.14 won't see it again until v0.2.15.
 const GITHUB_RELEASES_URL = 'https://api.github.com/repos/lexingtontechus/noble-trader-talaria/releases/latest'
 const UPDATE_CHECK_KEY = 'talaria-update-dismissed' // localStorage: JSON { [tag]: true }
-
-
-
-
-
 
 
 // Diagnostic logger — writes to console.error + window.__TA_URI_LOG__ if the
@@ -850,13 +1177,7 @@ function fmtToastFooter(tsMs, extra) {
 // back to title-cased underscores.
 
 
-
 // Aggression label + emoji map (mirrors discord.py signal delivery, 2026-08-08).
-
-
-
-
-
 
 
 // Kelly by symbol — latest sweep TABLE component (2026-08-12 redesign).
@@ -1336,6 +1657,129 @@ if (typeof globalThis !== 'undefined') {
 // ---------------------------------------------------------------------------
 const STYLE_ID = 'talaria-style'
 
+// Restored 2026-08-24 from noble-trader-talaria/talaria-plugin-v0.2.10.zip (a
+// pre-Batch-A backup) — Batch A's DAISY_CSS trim silently dropped this entire
+// custom-class stylesheet (it was a SEPARATE `const CSS = [...].join('')`,
+// injected into its own <style> tag, not part of the vendored daisyUI blob).
+// Base .tla-btn/.tla-btn-secondary/.tla-btn:hover/.tla-badge/.tla-table
+// (+ th/td/tbody-tr:hover) rules are intentionally NOT restored here — B1's
+// shared-css.js now defines those with different (deliberately unified admin+
+// talaria) values, and re-adding the old ones would silently override that
+// unification since this CSS is appended after DAISY_CSS. Everything else
+// (cards, rows, badges color-modifiers, the signals-pane incl. its
+// @container multi-placement rules, chip, banners, etc.) had no shared
+// equivalent and is restored verbatim.
+const CSS = `
+.tla-root{display:flex;flex-direction:column;height:100%;gap:12px;padding:16px;overflow:auto;}
+.tla-header{display:flex;align-items:center;justify-content:center;padding:10px 0 2px;font-size:1.15rem;font-weight:600;letter-spacing:.02em;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);margin-bottom:2px;gap:8px;}
+.tla-mark{display:inline-block;flex-shrink:0;}
+.tla-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+.tla-card{background:var(--ui-panel,#161616);border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;}
+.tla-card h3{margin:0;font-size:12px;font-weight:600;color:var(--ui-text-secondary,#999);text-transform:uppercase;letter-spacing:0.04em;}
+.tla-card .tla-value{font-size:26px;font-weight:700;color:var(--ui-text-primary,#eee);}
+.tla-card .tla-sub{font-size:11px;color:var(--ui-text-quaternary,#777);}
+.tla-row{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12px;}
+.tla-row .tla-k{color:var(--ui-text-tertiary,#888);}
+.tla-row .tla-v{color:var(--ui-text-primary,#eee);font-variant-numeric:tabular-nums;}
+.tla-pos{color:var(--ui-accent,#4c9aff);}
+.tla-neg{color:var(--ui-danger,#ff5c5c);}
+.tla-table .tla-sm{font-size:9px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.tla-kelly-table .tla-regime-cell{font-size:14px;font-weight:600;}
+.tla-kelly-table .tla-agg-cell{font-size:13px;font-weight:600;}
+.tla-kelly-table .tla-sig-cell{font-size:13px;font-weight:700;text-transform:uppercase;}
+.tla-kelly-table .tla-kelly-cell{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-kelly-fCell{font-size:9px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-pwin-cell{font-size:11px;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-ev-cell{font-size:11px;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-price-cell{font-size:10px;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-conf-cell{font-size:10px;color:var(--ui-text-tertiary,#888);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-ts-cell{font-size:9px;color:var(--ui-text-tertiary,#888);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-shift-cell{font-size:12px;text-align:center;}
+.tla-kelly-table .tla-prev-cell{font-size:11px;color:var(--ui-text-secondary,#aaa);}
+.tla-kelly-table .tla-sizemult-cell{font-size:9px;color:var(--ui-text-secondary,#aaa);}
+.tla-kelly-table .tla-group-header td{font-size:11px;font-weight:600;color:var(--ui-text-tertiary,#888);border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+.tla-kelly-table-wrap{overflow-x:auto;}
+.tla-context-card .tla-context-value{font-size:20px;font-weight:700;}
+.tla-context-card .tla-context-sub{font-size:10px;color:var(--ui-text-quaternary,#777);}
+.tla-badge.open{background:rgba(120,220,120,0.15);color:#78dc78;}
+.tla-badge.closed{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}
+.tla-badge.opened{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}
+.tla-badge.equity{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary,#888);}
+.tla-badge.active{background:rgba(120,220,120,0.15);color:#78dc78;}
+.tla-badge.grace{background:rgba(240,180,60,0.15);color:#f0b43c;}
+.tla-hot{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin-top:8px;}
+.tla-hot-card h3{margin-bottom:2px;}
+.tla-hot-ts{display:block;font-size:10px;color:var(--ui-text-quaternary,#777);margin-bottom:2px;}
+.tla-hot-chip{display:flex;flex-direction:row;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+.tla-hot-chip .tla-hot-sym{font-size:13px;font-weight:700;color:var(--ui-text-primary,#eee);}
+.tla-hot-chip .tla-hot-kelly{font-size:11px;font-variant-numeric:tabular-nums;color:var(--ui-text-secondary,#aaa);margin-left:4px;}
+.tla-hot-chip .tla-hot-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}
+.tla-hot-chip .tla-hot-regime{font-size:10px;color:var(--ui-text-tertiary,#888);margin-left:2px;white-space:nowrap;}
+.tla-hot-buy{background:rgba(76,154,255,0.10);border-color:rgba(76,154,255,0.35);}
+.tla-hot-buy .tla-hot-dir{color:#fff;background:#2f6fd6;}
+.tla-hot-sell{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);}
+.tla-hot-sell .tla-hot-dir{color:#fff;background:#d64545;}
+.tla-err{color:var(--ui-danger,#ff5c5c);font-size:12px;padding:8px;}
+.tla-ok{color:#78dc78;font-size:12px;}
+.tla-hint{color:var(--ui-text-quaternary,#666);font-size:11px;}
+.tla-explainer{color:var(--ui-text-secondary,#bbb);font-size:11px;line-height:1.55;background:rgba(127,127,127,0.07);border-left:3px solid var(--ui-accent,#4c9aff);padding:7px 10px;margin:8px 0 10px;border-radius:0 6px 6px 0;}
+.tla-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}
+.tla-field label{font-size:11px;color:var(--ui-text-tertiary,#888);}
+.tla-field input{background:var(--ui-panel,#101010);border:1px solid var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-primary,#eee);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit;}
+.tla-btn-secondary:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);opacity:1;}
+.tla-banner{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;background:rgba(240,180,60,0.10);border:1px solid rgba(240,180,60,0.35);color:#f0b43c;}
+.tla-banner-paywall{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);color:var(--ui-danger,#ff5c5c);}
+.tla-center{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px;padding:24px;text-align:center;}
+.tla-title{font-size:18px;font-weight:700;color:var(--ui-text-primary,#eee);}
+.tla-brick-picker{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 10px;}
+.tla-brick-btn{background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;color:var(--ui-text-secondary,#aaa);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;letter-spacing:0.03em;}
+.tla-brick-btn:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}
+.tla-brick-btn-active{background:rgba(76,154,255,0.18);border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}
+.tla-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;}
+.tla-inline{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;}
+.tla-badge.overconfident{background:rgba(255,92,92,0.15);color:var(--ui-danger,#ff5c5c);}
+.tla-badge.underconfident{background:rgba(120,220,120,0.15);color:#78dc78;}
+.tla-badge.calibrated{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary,#888);}
+.tla-badge.sig{background:rgba(120,220,120,0.15);color:#78dc78;}
+.tla-chip{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 8px;font-size:11px;font-weight:500;color:var(--ui-text-tertiary,#888);background:transparent;border:none;cursor:pointer;font-family:inherit;letter-spacing:0.02em;}
+.tla-chip:hover{color:var(--ui-text-primary,#eee);background:rgba(127,127,127,0.08);}
+.tla-chip .tla-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-text-quaternary,#777);flex-shrink:0;}
+.tla-chip.tla-chip-hot{color:var(--ui-accent,#4c9aff);font-weight:700;}
+.tla-chip.tla-chip-hot .tla-chip-dot{background:var(--ui-accent,#4c9aff);}
+.tla-pane-root{display:flex;flex-direction:column;height:100%;width:100%;min-width:0;box-sizing:border-box;gap:8px;padding:10px;overflow:auto;font-size:12px;container-type:inline-size;}
+.tla-pane-header{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ui-text-primary,#eee);padding-bottom:6px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+.tla-pane-badge{background:var(--ui-accent,#4c9aff);color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;}
+.tla-pane-open{margin-left:auto;background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-secondary,#aaa);border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;}
+.tla-pane-open:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}
+.tla-pane-last{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;}
+.tla-pane-sym{font-size:14px;font-weight:700;color:var(--ui-text-primary,#eee);}
+.tla-pane-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}
+.tla-pane-buy{color:#fff;background:#2f6fd6;}
+.tla-pane-sell{color:#fff;background:#d64545;}
+.tla-pane-kelly{font-size:11px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;}
+.tla-pane-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}
+.tla-pane-ts{font-size:10px;color:var(--ui-text-quaternary,#777);width:100%;}
+.tla-pane-price{display:flex;flex-wrap:wrap;gap:8px;width:100%;margin-top:4px;font-size:10px;font-variant-numeric:tabular-nums;padding-top:4px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+.tla-pane-price-entry{color:var(--ui-text-primary,#eee);}
+.tla-pane-price-sl{color:var(--ui-danger,#ff5c5c);}
+.tla-pane-price-tp{color:var(--ui-accent,#4c9aff);}
+.tla-pane-hint{padding:4px 0;}
+.tla-pane-list{display:flex;flex-direction:column;gap:4px;}
+.tla-pane-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;background:transparent;border:1px solid transparent;border-radius:6px;padding:5px 6px;color:var(--ui-text-primary,#eee);cursor:pointer;font-family:inherit;text-align:left;}
+.tla-pane-row:hover{background:rgba(127,127,127,0.08);border-color:var(--ui-stroke-secondary,#2a2a2a);}
+.tla-pane-price-row{flex-basis:100%;margin-top:2px;padding-top:2px;}
+.tla-pane-row-sym{font-size:12px;font-weight:700;}
+.tla-pane-row-kelly{font-size:10px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;margin-left:auto;}
+.tla-pane-row-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}
+.tla-pane-row-ts{font-size:10px;color:var(--ui-text-quaternary,#777);}
+.tla-pane-foot{font-size:9px;color:var(--ui-text-quaternary,#666);margin-top:auto;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+@container (min-width: 560px){
+.tla-pane-root .tla-pane-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
+.tla-pane-root .tla-pane-last{flex-wrap:nowrap;}
+.tla-pane-root .tla-pane-last .tla-pane-ts{width:auto;margin-left:auto;}
+.tla-pane-root .tla-pane-price{flex-wrap:nowrap;gap:12px;}
+}
+`
 
 
 // ---------------------------------------------------------------------------
@@ -1345,25 +1789,10 @@ const STYLE_ID = 'talaria-style'
 // more for small prices (FX ~1.08 → 5dp).
 
 
-
-
 // ---------------------------------------------------------------------------
 // Renko brick chart — SVG bricks (up green / down red), price axis on the
 // right, brick-index axis on the bottom. Ported from the admin plugin.
 // ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 // bricks: [{ open_price, close_price, direction }] ordered by brick_index asc.
@@ -1538,13 +1967,10 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
 // 10 min window vs the newest signal
 
 
-
-
 // ---------------------------------------------------------------------------
 // Pager — daisyUI join pagination with active button (2026-08-08)
 // ---------------------------------------------------------------------------
 const PAGE_SIZE = 8
-
 
 
 // ---------------------------------------------------------------------------
@@ -1669,7 +2095,7 @@ function WaitingScreen({ claim, onRetry }) {
   )
 }
 
-function PaywallScreen({ claim, onRetry }) {
+function PaywallScreen({ claim, onRetry, onChangeToken }) {
   const url = claim.next_charge_url || ''
   const status = claim.sub_status || 'expired'
   return React.createElement('div', { className: 'tla-center' },
@@ -1685,6 +2111,13 @@ function PaywallScreen({ claim, onRetry }) {
             'No payment link available — renew from the Talaria portal.'),
       React.createElement('button', { className: cn('tla-btn', 'tla-btn-secondary'), onClick: onRetry },
         'Re-check'),
+      // Previously the only way back to the Connect screen was an automatic
+      // bad-token/error re-route — a user whose token was revoked/replaced
+      // (not merely a lapsed subscription) had no way to enter a new one.
+      onChangeToken ? React.createElement('button', {
+        className: cn('tla-btn', 'tla-btn-secondary', 'tla-btn-sm'), onClick: onChangeToken,
+        style: { marginTop: 4 },
+      }, 'Use a different token') : null,
     ),
   )
 }
@@ -1709,7 +2142,6 @@ function PaywallScreen({ claim, onRetry }) {
 // Map a backend regime label to the sizing rule table. Mirrors the
 // MetaRegimeClassifier display logic (sizing_multiplier + aggressiveness).
 // Returns { mult, aggressiveness, tone } with tone 'pos'|'neg'|'warn'|undefined.
-
 
 
 // Fit a 3-state (UP/DOWN/FLAT) Markov chain on the brick close prices and
@@ -1896,7 +2328,6 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
     connected && !!activeBrickSym)
 
 
-
   // Mode 1: opening the dashboard marks all current signals seen (badge
   // clears). Mark dashboardActive so addSignal advances watermark instead of
   // counting unread while the user is looking at the dashboard.
@@ -1932,17 +2363,6 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
       if (!seen[k]) { seen[k] = true; bannerSignals.push(s) }
     }
   }
-  // HOT WINDOW COUNT (2026-08-11): the "Hot signals" stat previously showed
-  // bannerSignals.length — ALL qualified rows in the 200-row sweep fetch,
-  // which can span hours → "16 hot signals" while the banner itself said
-  // "5 in 10m window". Now it counts only signals within HOT_TTL_MS of the
-  // newest, matching the banner's "N in 10m window" (user: 16 not correct).
-  const hotWindowCount = bannerSignals.length
-    ? bannerSignals.filter((s) => {
-        const newest = Math.max(...bannerSignals.map((x) => Date.parse(x.ts) || 0))
-        return newest && (Date.parse(s.ts) || 0) >= newest - HOT_TTL_MS
-      }).length
-    : 0
 
   // Kelly histogram — latest per symbol (fetch is sweep_timestamp desc, so
   // first occurrence per symbol is the newest).
@@ -2040,11 +2460,6 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
         value: wsState === 'open' ? 'Live' : wsState === 'connecting' ? 'Connecting' : wsState === 'idle' ? '—' : 'Poll fallback',
         sub: 'signals (' + (isPro ? 'pro' : 'scout') + ')' + (isPro ? ' + portfolio' : '') + ' · REST poll 60s',
         tone: wsState === 'open' ? 'pos' : undefined,
-      }),
-      React.createElement(StatCard, {
-        title: 'Qualified signals',
-        value: String(signalStore.qualifiedCount60m || hotWindowCount || 0),
-        sub: 'qualified signals in the last 60m (shared count with widget + chip + toast)',
       }),
     ),
     // 0.2.11: Tab bar — Market (live per-symbol) | Analysis (historical/aggregate)
@@ -2234,8 +2649,8 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                     React.createElement('th', null, 'Realized'),
                     React.createElement('th', null, 'Bias'),
                     React.createElement('th', null, 'Status'),
-                    React.createElement('th', null, 'Bias (raw)'),
-                    React.createElement('th', null, 'Status (raw)'))),
+                    React.createElement('th', null, 'Next bias'),
+                    React.createElement('th', null, 'Next status'))),
                 React.createElement('tbody', null,
                   calibRows.map((r, i) => (
                     React.createElement('tr', { key: (r.day || '') + (r.symbol || '') + i },
@@ -2250,13 +2665,19 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                         React.createElement('span', {
                           className: cn('tla-badge', r.status === 'OVERCONFIDENT' ? 'closed' : r.status === 'UNDERCONFIDENT' ? 'opened' : ''),
                         }, r.status || '—')),
-                      // Raw bias (2026-08-23) — pre-enforcement model output, not
-                      // muted by Bayesian-shrink enforcement. See
-                      // noble-trader-fastapi-backend migration 119 +
-                      // worklog/20260823_calibration_bias_panel_raw_vs_enforced_mismatch.md.
+                      // Next bias (2026-08-24) — formatted as a delta vs the enforced Bias
+                      // column (raw − enforced), i.e. how much enforcement is currently
+                      // masking. Raw itself is pre-enforcement model output, not muted by
+                      // Bayesian-shrink enforcement. See noble-trader-fastapi-backend
+                      // migration 119 + worklog/20260823_calibration_bias_panel_raw_vs_enforced_mismatch.md.
+                      // Color threshold still keys off the raw value's own magnitude (the
+                      // alarm condition is "is the underlying model overconfident", not the
+                      // size of the delta itself).
                       React.createElement('td', {
                         className: r.bias_raw != null && Number(r.bias_raw) >= 0.30 ? 'tla-neg' : r.bias_raw != null && Number(r.bias_raw) <= -0.20 ? 'tla-pos' : '',
-                      }, r.bias_raw != null ? Number(r.bias_raw).toFixed(3) : '—'),
+                      }, r.bias_raw != null && r.bias != null
+                        ? (Number(r.bias_raw) - Number(r.bias) >= 0 ? '+' : '') + (Number(r.bias_raw) - Number(r.bias)).toFixed(3)
+                        : '—'),
                       React.createElement('td', null,
                         React.createElement('span', {
                           className: cn('tla-badge', r.status_raw === 'OVERCONFIDENT' ? 'closed' : r.status_raw === 'UNDERCONFIDENT' ? 'opened' : ''),
@@ -2266,7 +2687,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                 ),
               ),
         React.createElement('div', { className: 'tla-hint' },
-          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. "(raw)" columns show the pre-enforcement model output, which enforcement may have since shrunk toward calibrated.'),
+          'What it means: OVERCONFIDENT = the model predicted a HIGHER win rate than it actually delivered (it thinks it wins more than it does — be cautious). UNDERCONFIDENT = it wins MORE than predicted (predictions are too pessimistic). Close to 0 = well calibrated. "Next bias" = raw (pre-enforcement) bias minus the enforced Bias column — how much enforcement is currently masking. "Next status" is the classification on that same pre-enforcement model output.'),
       ),
       // Paper vs equal-weight — Precision Pro only
       isPro ? React.createElement('div', { className: 'tla-card' },
@@ -2639,7 +3060,12 @@ function UpgradeBanner({ latest, onDismiss }) {
 //   'expired'/'cancelled'          → paywall + payment link
 // ---------------------------------------------------------------------------
 function Talaria() {
-  const [config, updateConfig] = useConfig()
+  // Option A (2026-08-10): supabase_url/supabase_key are embedded service
+  // defaults, never entered by the user — restored here (was dropped by the
+  // 2026-08-24 shared-logic consolidation, which called useConfig() with no
+  // defaults, so hasConfig below could never be satisfied without them and
+  // ConnectTab's own claim-token-only form has no field for them anyway).
+  const [config, updateConfig] = useConfig({ supabase_url: DEFAULT_SUPABASE_URL, supabase_key: DEFAULT_ANON_KEY })
   const [claim, setClaim] = React.useState(null)
   const [checkPhase, setCheckPhase] = React.useState('idle') // idle|running|ok|bad-token|not-deployed|error
   const [checkMsg, setCheckMsg] = React.useState('')
@@ -2724,7 +3150,7 @@ function Talaria() {
 
   if (!hasConfig) {
     return React.createElement(ConnectTab, {
-      config, onSave: updateConfig, checkPhase: 'idle', checkMsg: '',
+      config, onSave: updateConfig, checkPhase: 'idle', checkMsg: '', variant: 'talaria',
     })
   }
   if (checkPhase === 'running' || checkPhase === 'idle') {
@@ -2739,7 +3165,7 @@ function Talaria() {
   if (checkPhase !== 'ok') {
     // bad-token / not-deployed / error — back to Connect with inline status
     return React.createElement(ConnectTab, {
-      config, onSave: updateConfig, checkPhase, checkMsg,
+      config, onSave: updateConfig, checkPhase, checkMsg, variant: 'talaria',
     })
   }
 
@@ -2751,7 +3177,9 @@ function Talaria() {
     return React.createElement(WaitingScreen, { claim, onRetry: runCheck })
   }
   if (status === 'expired' || status === 'cancelled') {
-    return React.createElement(PaywallScreen, { claim, onRetry: runCheck })
+    return React.createElement(PaywallScreen, {
+      claim, onRetry: runCheck, onChangeToken: () => updateConfig({ claim_token: '' }),
+    })
   }
   // active | grace
   return React.createElement(TalariaDashboard, { config, claim, latestRelease, onDismissUpgrade: () => dismissUpdate(latestRelease.tag) })
@@ -2763,7 +3191,7 @@ const plugin = {
   name: 'Talaria',
   defaultEnabled: true,
   register(ctx) {
-    ensureStyle(STYLE_ID)
+    ensureStyle(STYLE_ID, CSS)
     ctx.registerMany([
       {
         id: 'page',

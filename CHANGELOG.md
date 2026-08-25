@@ -3,6 +3,53 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.16] — 2026-08-24
+
+### Summary
+**Fix release for the 2026-08-24 shared-logic consolidation in `noble-trader-hermes-plugins`,
+plus the originally-requested token re-check / calibration-bias-delta / qualified-signals-card
+changes.** That consolidation had broken both the talaria and admin desktop plugins outright
+(`ensureStyle is not defined` on load — every shared declaration was scoped inside an IIFE and
+unreachable from plugin bodies) and, once that crash was fixed, surfaced a chain of further
+regressions from the same refactor. Full detail in `noble-trader-hermes-plugins`'
+`worklog/20260824_scope_implementation_and_build_verification.md`.
+
+### Fixed
+- Both plugins crashed on load (IIFE scoping bug in shared-logic.js) — fixed at the root.
+- The build tooling (`extract-ranges.js`) was silently discarding every `import` statement on
+  rebuild, and separately leaving orphaned duplicate doc-comments behind on every rebuild
+  (73 stale copies accumulated in one session) — both fixed; rebuilds are now byte-identical
+  across repeated runs.
+- `fetchSupabase`/`fetchSupabaseCount` were missing the `/rest/v1/` REST path prefix, breaking
+  nearly every Supabase query (symbols, sweeps, calibration bias, portfolio stats, etc.).
+- `ConnectTab` lost its claim-token field entirely (talaria users had no way to enter/replace a
+  token) — restored the original claim-token-only form.
+- `HotSignalsBanner` was called with props neither plugin's shared implementation actually
+  used, crashing on render — restored each plugin's real pre-refactor behavior.
+- `REGIME_FRIENDLY`/`AGGRESSION_FRIENDLY`/`META_REGIME_TABLE` were truncated to a handful of
+  generic keys that never matched real sweep-row data — friendly emoji labels effectively never
+  rendered. Restored the full tables.
+- The Sizing-what-if panel's `metaRegimeInfo`/`sizingWhatIf` had the wrong shape entirely —
+  restored the real implementation (regime → `{mult, aggressiveness}`, full baseline/final/cap
+  sizing math).
+- A whole second stylesheet of hand-written app CSS (`.tla-card`, `.tla-pane-root`'s
+  `@container` multi-placement rules, hot-signal chips, etc.) had been silently dropped during
+  an earlier CSS trim — restored.
+
+### Added
+- Talaria: "Use a different token" link on the expired/cancelled subscription screen, routing
+  back to the Connect screen without waiting for an automatic bad-token error.
+- Calibration bias panel: "Bias (raw)"/"Status (raw)" columns reformatted as deltas vs the
+  enforced Bias column ("Next bias" = raw − enforced, "Next status").
+
+### Removed
+- Talaria dashboard: "Qualified signals" stat card (below the hot-signals panel) — the shared
+  `qualifiedCount60m` count and its poller are unchanged; the chip, signals-pane, and toast
+  still show the same live count.
+
+### Version Bumps
+- Talaria plugin: `0.2.15` → `0.2.16`
+
 ## [Unreleased] — 2026-08-19
 
 ### Summary
