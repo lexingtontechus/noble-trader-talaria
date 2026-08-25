@@ -37,6 +37,9 @@ const DAISY_CSS = `
 .nta-join-item{display:inline-flex}
 `
 
+import React from 'react'
+import { cn, host, ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
+
 // shared-logic.js — single source of truth for logic duplicated (and drifted)
 // between noble-trader-admin and talaria desktop plugins.
 //
@@ -412,6 +415,9 @@ function ensureStyle(styleId) {
 
 
 
+
+
+
 /**
  * Talaria — Desktop Runtime Plugin (Electron app surface)
  *
@@ -441,8 +447,6 @@ function ensureStyle(styleId) {
  * Runtime disk plugins are plain ESM — no JSX. Uses React.createElement.
  * Only `react` + `@hermes/plugin-sdk` imports are allowed.
  */
-import React from 'react'
-import { cn, host, ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
 
 // ---------------------------------------------------------------------------
 // Plugin config (localStorage-backed — same pattern as noble-trader-admin)
