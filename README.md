@@ -191,7 +191,8 @@ your Talaria dashboard renders them in real time.
 |---|---|
 | **Talaria desktop plugin** | Native Hermes Desktop page: live hot signals, renko brick charts (hover for prices), per-symbol signal health, paper book + portfolio analytics, 60s auto-refresh + realtime updates. **v0.2.2 widget:** live qualified-signal badge (pane shows `N live`, chip shows `Talaria · N`), ENTRY/SL/TP pricing on EVERY displayed signal, ENTRY price in toasts, 10-min TTL hot-signal count, plugin version shown in footers |
 | **talaria-tools** | In-chat agent tools — `talaria_health`, `talaria_stats`, `talaria_calibration` — so your Hermes agent can answer "what does this signal mean?" |
-| **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
+|- **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
+|- **talaria-trade skill** | A skill your agent uses to execute live 0.01-lot BUY/SELL orders from Talaria signals into the MT5 web trader via the Hermes in-app browser (auto/semi/manual modes) |
 | **Signal notifier + daily digest** | Optional Hermes cron scripts that deliver new signals to whatever messaging you've connected |
 | **Supabase migrations** | The read-only views/tables the plugin reads (anon RLS — subscribers can only SELECT) |
 
@@ -258,10 +259,17 @@ Hermes agent can answer signal questions:
 cp -r skills/trading/talaria-client "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
 ```
 
-**5. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
+**5. (Optional) Trade execution skill** — copy the `talaria-trade` skill
+so your agent can execute live orders:
+
+```bash
+cp -r skills/trading/talaria-trade "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
+```
+
+**6. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
 **Talaria** in Settings → Plugins, and open the **Talaria** tab.
 
-**6. Connect** — paste your **claim token** (get it from
+**7. Connect** — paste your **claim token** (get it from
 **[nobletrading.app](https://nobletrading.app)** after checkout). The service
 connection is pre-configured — no URLs or keys to enter. The dashboard unlocks.
 
@@ -347,7 +355,25 @@ Copy the `talaria-client` skill (see [Install](#install)) and enable the
 
 Your agent answers from live data — no manual lookups.
 
-**3. Get notified without watching the screen**
+**3. Execute trades from signals (optional)**
+
+Copy the `talaria-trade` skill:
+
+```bash
+cp -r skills/trading/talaria-trade \
+  "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
+```
+
+and set `talaria_execution_mode` in your profile config:
+
+- `manual` — your agent opens the MT5 order panel with 0.01 lots pre-set, you
+  click Buy
+- `semi` — your agent opens the panel, sets volume, and confirms before you approve
+- `auto` — your agent executes BUY/SELL orders autonomously (0.01 lots)
+
+Requires the MT5 web trader loaded in a Hermes in-app browser preview pane.
+
+**4. Get notified without watching the screen**
 
 Three optional cron jobs ship with Talaria (see `scripts/`):
 
@@ -365,7 +391,7 @@ Enable them in Hermes (cron UI or `hermes cron`) and connect a messaging
 channel with `hermes setup` → *gateway* if you want them outside the desktop
 app.
 
-**4. Set up memory so Talaria "knows" you**
+**5. Set up memory so Talaria "knows" you**
 
 Hermes keeps persistent memory per profile. Tell it the facts that matter and
 they stick across sessions:
@@ -377,7 +403,7 @@ they stick across sessions:
 The agent also saves lessons learned from your corrections, so it gets better
 at answering Talaria questions over time.
 
-**5. Understand what you're looking at**
+**6. Understand what you're looking at**
 
 - **Hot signals** — the most recent qualified signals, ranked by Kelly (the
   engine's conviction). Chips drop off after 10 minutes.
@@ -388,7 +414,7 @@ at answering Talaria questions over time.
 - **Paper portfolio (Pro)** — simulated book the strategy is validated
   against; PnL is realized only on close, so open positions show `$0/—`.
 
-**6. Keep it fresh**
+**7. Keep it fresh**
 
 The dashboard auto-refreshes every 60s and streams live when available. The
 widget pane shows only the last 60 minutes of signals; the badge counts live
@@ -397,6 +423,7 @@ qualified signals and clears when the last signal ages out.
 ## Docs
 
 - [talaria-client skill](skills/trading/talaria-client/SKILL.md) — what your agent can answer for you
+- [talaria-trade skill](skills/trading/talaria-trade/SKILL.md) — live trade execution modes (auto/semi/manual)
 - [OPERATIONS.md](docs/OPERATIONS.md) — operator/deploy notes
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) — repo structure, install details, release checklist
 - [ROADMAP.md](roadmap.md) — web dashboard plugin delivery plan and implementation notes

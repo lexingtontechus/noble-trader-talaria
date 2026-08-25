@@ -16,6 +16,7 @@ Talaria = read-only UI + chat tools over the Noble Trader Supabase data surface 
 | Cron notifiers | `scripts/talaria_digest.py`, `scripts/talaria_signal_notify.py` | Daily digest + live signal watcher |
 | Schema contract | `supabase/migrations/` | Views/tables the plugin reads (anon RLS) |
 | Client skill | `skills/trading/talaria-client/SKILL.md` | User-facing Hermes skill |
+| Execution skill | `skills/trading/talaria-trade/SKILL.md` | Live trade execution via MT5 web trader (auto/semi/manual) |
 
 ## Plugin Development Rules
 - **React.createElement only** — no JSX in `plugin.js`.
