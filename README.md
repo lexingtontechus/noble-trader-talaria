@@ -1,5 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Talaria-Noble%20Trading%20Signals-4c9aff" alt="Talaria" />
+  <img src="https://img.shields.io/badge/plugin-v0.2.18-16a34a" alt="v0.2.18" />
   <img src="https://img.shields.io/badge/status-live-16a34a" alt="live" />
   <img src="https://img.shields.io/badge/plugin-Hermes%20Desktop-888" alt="Hermes Desktop" />
 </p>
@@ -21,180 +22,38 @@ secrets on your machine. The plugin talks to Supabase directly with a public
 Live signals, ranked by edge — with the renko brick chart showing the price
 action behind each signal:
 
-| Dashboard | Signals panel |
-|---|---|
-| ![Talaria dashboard — full Hermes interface with signals panel and toast notification](docs/screenshots/talaria1.png) | ![Talaria signals panel — live feed of qualified signals with entry/SL/TP](docs/screenshots/talaria2.png) |
+|| Dashboard | Signals panel |
+||---|---||
+|| ![Talaria dashboard — full Hermes interface with signals panel and toast notification](docs/screenshots/talaria1.png) | ![Talaria signals panel — live feed of qualified signals with entry/SL/TP](docs/screenshots/talaria2.png) ||
 
-| Renko brick analysis | Navigation & sidebar |
-|---|---|
-| ![Talaria renko chart — MARKOV + PATTERN analysis with EV/P_win/TimesFM cards and Kelly table](docs/screenshots/talaria3.png) | ![Talaria sidebar — session navigation + live signals feed](docs/screenshots/talaria4.png) |
-
----
-
-## What's in this release (v0.2.7)
-
-**Widget newest-signal fix (toast/widget disconnect root cause).**
-
-| Change | Detail |
-|---|---|
-| **Widget now shows the newest signal** | The 20-row poll previously fed rows newest-first, so `.slice(0, RECENT_MAX)` truncated the NEWEST rows out of the widget's store — it showed the oldest 12 of each batch while the toast showed the newest. The poll now feeds oldest→newest (reversed), so the newest signal survives at the top of the widget list. |
-| **Always re-render** | `addSignal` always notifies the pane after updating the store, so re-seen rows still refresh the widget between poll ticks. |
-
-**Deploy:** `talaria-plugin-v0.2.7.zip` release archive available.
-
-## What's in this release (v0.2.8)
-
-**Count harmonization — all 4 surfaces now agree.**
-
-| Change | Detail |
-|---|---|
-| **Toast `+N more` → `<N> live signals`** | The `+N` was a cumulative toasts-fired counter (since last `markSeen()`), not a signal count. The toast footer now reads the shared `signalStore.qualifiedCount60m` — a Supabase `COUNT(qualified=eq.true, sweep_timestamp >= now−60m)` — so the toast and widget badge always show the same number. |
-| **Toast footer reordered** | Regime label (🐂/🐻) now appears **first**, before datetime and age: `🐂 High-vol bull · 2026-08-14 … · 22m ago · N live signals`. |
-| **Chip badge** | Now uses the shared `signalStore.qualifiedCount60m` (was TTL-filtered `snap.recent` capped at `RECENT_MAX=12`). |
-| **Dashboard stat** | Renamed "Hot signals (10m)" → "Qualified signals", reads the shared 60m count, and subscribes to the store for live updates. |
-| **Widget pane badge** | Was already referencing `qualifiedCount60m` (2026-08-11 WIP) but the field was never populated — now it is, via the shared poll's COUNT query. |
-
-### Dashboard UX refinements
-| Change | Detail |
-|---|---|
-| **Hot signals timestamp → local** | Changed from UTC (`as of 2026-08-15 00:05 UTC`) to the user's local timezone via `toLocaleString()`. |
-| **Plan panel labels** | `status active · claim re-check 24h` → `Subscription Active · Token Valid`. |
-| **Symbols panel label** | `from nt_symbol plan_ids` → the plan name (e.g. `Precision Pro`). |
-| **Kelly table panel** | Removed `sweep` / `nt_sweep_result` references from the panel header and description text ("Latest signal per symbol"). |
-
-**Deploy:** `talaria-plugin-v0.2.8.zip` release archive available.
-
-## What's in this release (v0.2.8-remote)
-
-**Talaria Remote Gateway — web dashboard plugin.** A new `dashboard/` directory
-ships the headless-gateway counterpart to the desktop plugin. This lets you
-run a 24/7 remote/cloud Hermes gateway (no Electron) and view Talaria signals
-in the web dashboard.
-
-**Two installation paths — one for each use case:**
-
-| You... | Install this | Where it runs |
-|---|---|---|
-| Use Hermes **Desktop** (Electron) | `talaria-plugin-v0.2.8.zip` → `desktop-plugins/talaria/` | Local Electron app |
-| Run a **remote/cloud gateway** and want the web dashboard | `talaria-v0.2.8-remote-dashboard.tar.gz` → `~/.hermes/plugins/talaria/` + `hermes plugins enable talaria` | Gateway web browser |
-
-### Web dashboard plugin (`dashboard/`)
-
-- **Same data path** — talks to Supabase directly (anon read-only key), identical
-  to the desktop plugin. No local server or secrets required.
-- **Same signal logic** — shared signal store, claim-check routing, Supabase
-  REST + Phoenix Realtime WebSocket, kelly table, renko charts, signal health.
-- **Dashboard plugin contract** — plain IIFE loaded via `<script>` tag by the
-  Hermes web dashboard. Uses `window.__HERMES_PLUGIN_SDK__` for React/hooks,
-  registers via `window.__HERMES_PLUGINS__.register('talaria', Component)`.
-- **Backend proxy** (`dashboard/plugin_api.py`) — optional FastAPI router at
-  `/api/plugins/talaria/` for deployments behind strict firewalls.
-
-### Install on a remote gateway
-
-```bash
-# Download the dashboard plugin release
-gh release download talaria-v0.2.8-remote -R lexingtontechus/noble-trader-talaria --pattern '*dashboard*'
-# Extract to your Hermes home
-mkdir -p ~/.hermes/plugins/talaria
-cp -r dashboard/ ~/.hermes/plugins/talaria/dashboard/
-# Enable it (required — assets 404 unless enabled)
-hermes plugins enable talaria
-# Start the headless gateway with the dashboard
-hermes serve --host 0.0.0.0 --port 9119
-# Open http://your-gateway:9119/talaria in any browser
-```
-
-## What's in this release (v0.2.7)
-
-**Widget poll truncation fix — the widget pane could never show the newest signal.**
-
-| Change | Detail |
-|---|---|
-| **Poll feed order** | The 20-row poll fetched newest-first and fed into `addSignal` unconditionally — but `addSignal` does `recent = [row, ...recent].slice(0, RECENT_MAX=12)` (unshift to front), so after 20 newest-first feeds the newest rows sat at the array **tail** and got truncated. Now the loop reverses: feeds oldest→newest so the newest survives at `recent[0]`. |
-| **Only newest toasts** | `suppressToast` now flips to `!isNewest` — only the last-fed (newest) row toasts; older rows in the same batch update the store without replacing the toast. |
-| **Re-render on every poll** | `addSignal` always `_emit()`s after a `recent[]` update — re-seen rows (ts ≤ watermark) still notify the pane so it re-renders between sweep ticks. |
-
-**Deploy:** `talaria-plugin-v0.2.7.zip` release archive available.
-
-## What's in this release (v0.2.6)
-
-**Toast freshness fix + widget polling speed.**
-
-| Change | Detail |
-|---|---|
-| **Toast shows newest signal** | The 60s widget poll previously toasted EVERY qualified signal in the 20-row batch (desc order); since the toast replaces via a stable ID, the oldest-in-batch survived as the toast content. Now only the newest unseen signal toasts per poll tick (`addSignal(sig, { suppressToast })` — older batch rows skip `host.notify` but still update the store/widget). |
-| **Widget polling faster** | `CHIP_POLL_MS` 60s → 10s — signals qualify every ~6s (sweep cadence); the pane now lags the live DB by ≤10s instead of ≤60s. |
-
-**Deploy:** `talaria-plugin-v0.2.6.zip` release archive available.
-
-## What's in this release (v0.2.5)
-
-**Widget multi-placement + placement root-cause + delivery-chain watchdog.**
-
-| Change | Detail |
-|---|---|
-| **Widget multi-placement** | The signals pane docks **right of the chat by default** but now adapts to ANY zone you drag it to. `.tla-pane-root` uses CSS container queries (`container-type: inline-size` + `@container (min-width: 560px)`), so in bottom strips / widened docks the row list becomes a two-column grid and the card/price flatten to one row. |
-| **Placement root-cause** | If the pane ever appears in the LEFT sidebar instead of right of the chat, that's the Hermes app's persisted layout tree holding a stale adoption — run **⌘K → Reset layout** once to restore the right dock. Full detail in the repo CHANGELOG + talaria skill. |
-| **Delivery-chain watchdog** | New `scripts/talaria_delivery_health.py` monitors the full signals → toast → widget path every 30m (cron `talaria-delivery-health`): signal freshness, qualified flow in the widget TTL window, deploy byte-identity across all Electron homes, plugin load errors, widget-store recency. Silent when healthy; alerts to Discord on drift. |
-| **Deploy fix** | All 3 Electron homes + repo root re-synced to the current build (the v0.2.4 zip on disk was stale — pre-fix plugin.js). |
-
-**Deploy:** `talaria-plugin-v0.2.6.zip` release archive available.
-
+|| Renko brick analysis | Navigation & sidebar |
+||---|---||
+|| ![Talaria renko chart — MARKOV + PATTERN analysis with EV/P_win/TimesFM cards and Kelly table](docs/screenshots/talaria3.png) | ![Talaria sidebar — session navigation + live signals feed](docs/screenshots/talaria4.png) ||
 
 ---
 
----
+## What's in this release (v0.2.18)
 
-## What's in this release (v0.2.4)
+**Fix release** — restores all surfaces after the 2026-08-24 shared-logic consolidation,
+plus user-requested refinements.
 
-**Kelly table redesign + group header fix + null context + admin plugin.**
+See [CHANGELOG.md](CHANGELOG.md) for full historical release notes.
 
-| Change | Detail |
-|---|---|
-| **Kelly table redesign** | The "Kelly by symbol" panel in both talaria and admin plugins has been converted from an HBar histogram to a **table format**. Moved below "Markov + pattern". Displays latest nt_sweep_result per symbol, grouped by asset class and sorted by symbol. New columns: aggression, markov_p_up, markov_p_dn, regime_shift, prev_regime. Brick columns and excluded fields (n_trades, profit_factor, sweep_window, sweep_duration, source, venue, error, total_return, annual_return, sweep_timestamp) are hidden. |
-| **Below-table context cards** | 3 inline StatCards show the TimesFM forecast, EV, and P_win for the most-qualified symbol. |
-| **Group header fix** | Group headers now render as a separate full-width row instead of an inline cell within the first data row. Previously, the first symbol's symbol cell was replaced by the group label, causing that symbol to disappear from the table. |
-| **Null record context** | Added explanatory text to the panel description: rows with `—` dashes in signal/price columns represent symbols whose latest sweep did NOT qualify (qualified=false). Regime, aggression, and prev_regime are still current; only signal-dependent fields are blank. |
-| **Fetch select expansion** | Both plugins now fetch `aggression, regime_shift, prev_regime, p_win, ev, p_timesfm, size_mult` from `nt_sweep_result` for the Kelly table. |
-| **Helper functions** | `AGGRESSION_FRIENDLY` map (🔥⚡🎯), `fmtAggression()`, `fmtPwin()`, `fmtKellyPct()`, `fmtRegimeShort()` added to both plugins. |
+|| Area | What changed |
+||---|---|
+|| **Crash on load** | Fixed `ensureStyle is not defined` — the shared-logic IIFE was scoping shared declarations away from plugin bodies. Both desktop + dashboard plugins now load correctly. |
+|| **Supabase queries** | All REST queries were missing the `/rest/v1/` prefix — now fixed. Symbols, sweeps, calibration, portfolio stats all query correctly again. |
+|| **Token rotation** | New "Use a different token" link on the expired/cancelled subscription screen — no need to wait for an automatic error to re-enter a claim token. |
+|| **Calibration bias** | Raw bias/status now shown as a delta (Δ = raw − enforced) under the enforced cell — see both the masked model and true drift at once. |
+|| **Qualified signals card** | Removed the redundant stat card — the count lives in the statusbar chip, toast, and widget pane badge already. |
+|| **Polling optimization** | `DATA_POLL_MS` reduced to 5 min when Realtime WebSocket is active (-80% egress per user/day). |
+|| **TradingView symbols** | Dynamic symbol mapping — fixes `FOREXCOM:US500` → `PEPPERSTONE:US500` and other retagged indices. |
+|| **Widget multi-placement** | Signals pane docks right of chat by default; adapts to any zone via CSS container queries. |
+|| **TalariaMark** | Bronze broad-bolt logo now in all header surfaces (desktop + dashboard). |
 
-**Deploy:** `talaria-plugin-v0.2.4.zip` release archive available.
-
-
----
-
----
-
-## What's in this release (v0.2.3)
-
-**Plan-scoped realtime channels + channel rename.**
-
-| Change | Detail |
-|---|---|
-| **Plan-scoped signal broadcasts** | Signals are now published per plan: `realtime:signals.signal_scout` (Scout's symbols) and `realtime:signals.precision_pro` (Pro's symbols). The backend routes each signal to the topic(s) matching the symbol's plan membership; the plugin joins only its own plan's topic (decided by the server-validated claim — never client-guessed). Pro subscribers receive Scout + Pro symbols; Scout subscribers receive only their 10. |
-| **`realtime:paper` → `realtime:portfolio`** | The paper-validation channel was renamed. It carries the **simulated validation book** (positions the engine would have taken, realized PnL, equity ticks) — not a demo trading account. Topic is now `realtime:portfolio` (Precision Pro only). |
-| **Fail-open routing** | If a symbol's plan membership can't be resolved, the signal is published to **both** plan topics so no subscriber misses it. Unknown plan claims also join both topics (same rule). |
-| **Widget display order + dedup** | The signals pane now renders **most-recent-at-top** (newest first, always — even after a batch poll), the pinned card shows the actual newest signal instead of a stale persisted one, and a signal **never renders twice** (the card's signal is excluded from the list — fixes the duplicated-row look in the widget). Badge counts all live signals. |
-| **Date/Time columns in user locale** | The Paper portfolio table's timestamp column is now **Date/Time** in your **local timezone** (e.g. `2026-08-10 13:25 PDT`) instead of a raw UTC `ts`. Same change in the admin plugin's Recent signals table. |
-| **Supabase Realtime dashboard** | Nothing to configure there — broadcast channels are dynamic. No triggers, policies, or publications are needed for this broadcast-only setup. |
-
-**Data flow:** Noble Trader's quant engine sweeps symbols every 5 minutes
-(light) and weekly (heavy), and qualified signals are published to Supabase →
-your Talaria dashboard renders them in real time.
+**Deploy:** `talaria-plugin-v0.2.18.zip` release archive available.
 
 ---
-
-## What's in this release (v0.2.2)
-
-| Component | What it is |
-|---|---|
-| **Talaria desktop plugin** | Native Hermes Desktop page: live hot signals, renko brick charts (hover for prices), per-symbol signal health, paper book + portfolio analytics, 60s auto-refresh + realtime updates. **v0.2.2 widget:** live qualified-signal badge (pane shows `N live`, chip shows `Talaria · N`), ENTRY/SL/TP pricing on EVERY displayed signal, ENTRY price in toasts, 10-min TTL hot-signal count, plugin version shown in footers |
-| **talaria-tools** | In-chat agent tools — `talaria_health`, `talaria_stats`, `talaria_calibration` — so your Hermes agent can answer "what does this signal mean?" |
-|- **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
-|- **talaria-trade skill** | A skill your agent uses to execute live 0.01-lot BUY/SELL orders from Talaria signals into the MT5 web trader via the Hermes in-app browser (auto/semi/manual modes) |
-| **Signal notifier + daily digest** | Optional Hermes cron scripts that deliver new signals to whatever messaging you've connected |
-| **Supabase migrations** | The read-only views/tables the plugin reads (anon RLS — subscribers can only SELECT) |
 
 ## Why Noble Trader
 
@@ -230,9 +89,9 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.8.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.8.zip
-SRC=talaria-plugin/plugin.js
+# Download talaria-plugin-v0.2.18.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.18.zip
+SRC=talaria/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \
   "$HOME/AppData/Local/hermes/profiles/<your-profile>/desktop-plugins/talaria"; do
@@ -248,7 +107,7 @@ done
 
 **3. (Optional) Python chat tools** — copy `talaria-tools/` to
 `<hermes-home>/profiles/<your-profile>/plugins/` and set
-`TALARIA_SUPABASE_URL`, `TALARIA_SUPABASE_KEY` (the public anon key — same
+|`TALARIA_SUPABASE_URL`, `TALARIA_SUPABASE_KEY` (the public anon key — same
 values the plugin uses by default), `TALARIA_CLAIM_TOKEN` (from
 nobletrading.app).
 
@@ -263,7 +122,8 @@ cp -r skills/trading/talaria-client "$HOME/AppData/Local/hermes/profiles/<your-p
 so your agent can execute live orders:
 
 ```bash
-cp -r skills/trading/talaria-trade "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
+cp -r skills/trading/talaria-trade \
+  "$HOME/AppData/Local/hermes/profiles/<your-profile>/skills/trading/"
 ```
 
 **6. Restart Hermes Desktop** (or ⌘K → *Reload desktop plugins*), enable
@@ -313,11 +173,11 @@ hermes doctor         # health check if something's off
 
 **3. Where your Hermes home is**
 
-- Default home: `~/.hermes/` (on Windows: `C:\Users\<you>\.hermes\`)
-- Or `%LOCALAPPDATA%\hermes\` if you installed via the Windows desktop
+- Default home: `~/.hermes/` (on Windows: `C:\\Users\\<you>\\.hermes\\`)
+- Or `%LOCALAPPDATA%\\hermes\\` if you installed via the Windows desktop
   bundle — the app resolves `HERMES_HOME` from the registry first.
 - With a non-default profile active: `~/.hermes/profiles/<profile>/` (or
-  `%LOCALAPPDATA%\hermes\profiles\<profile>\`).
+  `%LOCALAPPDATA%\\hermes\\profiles\\<profile>\\`).
 
 Talaria's plugin file goes in `<hermes-home>/desktop-plugins/talaria/plugin.js`
 (or the active profile's `desktop-plugins/` — see [Install](#install)).
@@ -422,6 +282,7 @@ qualified signals and clears when the last signal ages out.
 
 ## Docs
 
+- [CHANGELOG.md](CHANGELOG.md) — full release history
 - [talaria-client skill](skills/trading/talaria-client/SKILL.md) — what your agent can answer for you
 - [talaria-trade skill](skills/trading/talaria-trade/SKILL.md) — live trade execution modes (auto/semi/manual)
 - [OPERATIONS.md](docs/OPERATIONS.md) — operator/deploy notes

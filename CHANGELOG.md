@@ -3,6 +3,42 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.18] — 2026-08-26
+
+### Summary
+**Brick pattern label fix + version bump.** Every symbol was showing "3-push"
+due to two regressions from the 2026-08-24 shared-logic consolidation:
+`brickPattern()` compared `d > 0` on brick objects (always `false` → all `'D'`),
+and `patternLabel()` had a `matchesPush` catch-all returning "N-push" for any
+3+ consecutive same-direction bricks.
+
+### Fixed
+- `brickPattern()`: changed `d > 0` to `Number(d.close_price) > Number(d.open_price)`
+  — correctly classifies brick direction from object data, not object identity
+- `patternLabel()`: replaced bloated catch-all `matchesPush` version with the
+  simplified 9-line version from commit `3c0afbf` that only matches exact
+  known patterns (UUU → "3-push up 📈", DDD → "3-push down 📉", etc.)
+- `fmtRegime()`: restored volatility-tier prefix handling (`low_`/`high_`/`med_`
+  stripping) for composite regime labels like `low_vol_strong_bull`
+- Removed orphaned `patternLabel` code block in admin plugin body that was
+  causing `SyntaxError: 'return' outside of function`
+
+### Version Bumps
+- Talaria plugin: `0.2.17` → `0.2.18`
+- Render harness: mock latest release bumped to `v0.2.19`, deployed version
+  assertion updated to `v0.2.18`
+
+### Deploy
+- All 17 talaria plugin.js copies synced across `desktop-plugins/` + `plugins/`
+  deploy paths (the app loads from both roots)
+- `build-plugins.py` `DEPLOY_DIRS` expanded with 4 new targets for the
+  unified agent-plugin door (`<hermes home>/plugins/<name>/desktop/plugin.js`)
+- Release zip: `talaria-plugin-v0.2.18.zip`
+
+### Verification
+- `node test_talaria_render_harness.mjs` — 110/110 PASS
+- ESM `node --check` on all deploy copies — PASS
+
 ## [v0.2.16] — 2026-08-24
 
 ### Summary
@@ -39,7 +75,7 @@ regressions from the same refactor. Full detail in `noble-trader-hermes-plugins`
 ### Added
 - Talaria: "Use a different token" link on the expired/cancelled subscription screen, routing
   back to the Connect screen without waiting for an automatic bad-token error.
-- Calibration bias panel: "Bias (raw)"/"Status (raw)" columns reformatted as deltas vs the
+- Calibration bias panel: "Bias (raw)"/Status (raw)" columns reformatted as deltas vs the
   enforced Bias column ("Next bias" = raw − enforced, "Next status").
 
 ### Removed
@@ -50,7 +86,73 @@ regressions from the same refactor. Full detail in `noble-trader-hermes-plugins`
 ### Version Bumps
 - Talaria plugin: `0.2.15` → `0.2.16`
 
-## [Unreleased] — 2026-08-19
+## [v0.2.15] — 2026-08-23
+
+### Summary
+**Calibration bias panel raw/enforced delta display + qualified-signals card removal.**
+Mirror of the noble-trader-hermes-plugins change: raw bias/status are now shown as small
+text under the enforced cell with a delta (Δ = raw − enforced) so users see both the masked
+and true model drift without 4 separate columns. Also removes the redundant "Qualified
+signals" StatCard from the talaria dashboard (the count is already in the statusbar chip +
+toast + widget pane badge).
+
+### Changed
+- Calibration bias panel: raw `bias_raw`/`status_raw` now rendered as a small delta under the
+  enforced `bias`/`status` cell (Δ = raw − enforced). Raw status only shows when it differs
+  from enforced.
+- Removed redundant "Qualified signals" StatCard from the talaria dashboard body — the shared
+  `qualifiedCount60m` count (chip + toast + widget pane badge) is unchanged and still drives
+  all other surfaces.
+
+### Fixed
+- Dashboard `dist/index.js` duplicate render + stale "last 10 rows" hint in the Analysis tab
+  CalibTable — fixed.
+
+### Version Bumps
+- Talaria plugin: `0.2.14` → `0.2.15` (dashboard was stuck at `0.2.11`)
+
+## [v0.2.14] — 2026-08-23
+
+### Summary
+**Calibration bias panel raw columns + upgrade-banner scaffolding.**
+Mirror of noble-trader-hermes-plugins: all talaria dashboard variants
+(`plugin.js`, `desktop/plugin.js`, `dashboard/dist/index.js`) now query
+`bias_raw`/`status_raw`/`n` from `v_eod_calibration_bias_latest` (backend
+migration 119 in `noble-trader-fastapi-backend`) and render "(raw)" columns
+alongside the existing enforced `bias`/`status` columns. Drops the stale
+"· last 10 rows" hint text.
+
+Note: `plugin.js`, `desktop/plugin.js`, and the render harness also carry a
+pre-existing, previously-uncommitted "Phase 2" in-plugin upgrade-banner feature
+(version bump to 0.2.14, GitHub Releases polling, `UpgradeBanner` component)
+already sitting in the working tree — included as-is, untouched by this fix.
+
+### Files Modified
+- `plugins/talaria/desktop/plugin.js` — calibration bias raw columns + upgrade-banner scaffolding
+- `plugins/talaria/plugin.js` — synced from desktop
+
+## [v0.2.13] — 2026-08-20
+
+### Summary
+**Polling optimization (60s→300s) + PostHog DAU/MAU analytics.**
+
+### Changed
+- `DATA_POLL_MS`: 60s → 300s (5min REST fallback; -80% egress per user/day). WebSocket
+  Realtime remains the primary channel; REST polling now only runs as a slower fallback.
+- PostHog analytics: CDN-lazy-loaded SDK, `dashboard_open` event on mount.
+- PostHog `api_host` corrected: `us.posthog.com` → `us.i.posthog.com` (was 404ing events).
+- PostHog CDN URL: `us-assets.posthog.com` → `us-assets.i.posthog.com`.
+- `README.md` install download ref updated: `talaria-plugin-v0.2.3.zip` → `talaria-plugin-v0.2.13.zip`.
+
+### Version Bumps
+- `PLUGIN_VERSION`: `0.2.11` → `0.2.13`
+- Render harness version assertion: `0.2.11` → `0.2.13`
+
+### Verification
+- `node --check plugin.js`: PASS
+- `node test_talaria_render_harness.mjs`: 31/31 PASS
+
+## [v0.2.12] — 2026-08-19
 
 ### Summary
 **TradingView symbol mapping fixes + Supabase egress assessment.** Fixed stale
@@ -81,10 +183,15 @@ polling (see `docs/supabase_egress_assessment.md`).
   tab is visible. See `docs/supabase_egress_assessment.md`.
 
 ### Files Modified
-- `plugins/talaria/desktop/plugin.js` (4 changes: FOREXCOM→PEPPERSTONE, US30→US30USD, US100→UK100, dynamic tvSymbolMap)
-- `plugins/talaria/plugin.js` (synced from desktop)
-- `.hermes/plugins/talaria/desktop/plugin.js` (hermes-plugins mirror)
-- `.hermes/plugins/talaria/plugin.js` (hermes-plugins root)
+- `.hermes/plugins/talaria/desktop/plugin.js` (canonical source)
+- `.hermes/plugins/talaria/plugin.js` (root, synced from desktop)
+
+### Verification
+- `node --check`: PASS
+- `node test_talaria_render_harness.mjs`: **31/31 PASS**
+- All 5 talaria plugin.js copies byte-identical (SHA-256 match)
+- Zero `FOREXCOM` references remaining; 3 `PEPPERSTONE` refs confirmed
+- 4 `useSupabaseData` signal queries pass `{ wsState }` option
 
 ## [v0.2.11] — 2026-08-16 → 2026-08-17
 
@@ -108,9 +215,9 @@ polling (see `docs/supabase_egress_assessment.md`).
 
 ### Verified
 | - `node --check plugin.js` passes (both desktop + dashboard dist/index.js)
-||| - `node test_talaria_render_harness.mjs` — **150 PASS, 0 FAIL** (Market tab: sizing what-if + TV chart panel with TradingView iframe widget + symbol selection placeholder, Analysis tab: source-level assertions)
-||| - `node test_dashboard_render_harness.mjs` — **42 PASS, 0 FAIL**
-||| - Byte-verified deploy to 2 Electron profile dirs: identical MD5 `b46560fcbe341df6c1a85e94295796fa` (2026-08-17 15:30: chart height 240→320px, iframe key prop for symbol remount)
+|| - `node test_talaria_render_harness.mjs` — **150 PASS, 0 FAIL** (Market tab: sizing what-if + TV chart panel with TradingView iframe widget + symbol selection placeholder, Analysis tab: source-level assertions)
+|| - `node test_dashboard_render_harness.mjs` — **42 PASS, 0 FAIL**
+|| - Byte-verified deploy to 2 Electron profile dirs: identical MD5 `b46560fcbe341df6c1a85e94295796fa` (2026-08-17 15:30: chart height 240→320px, iframe key prop for symbol remount)
 
 ### Data Flow
 |- **Price data for TV chart**: via TradingView iframe widget (`s.tradingview.com/widgetembed`) — loads 5M candles directly from TradingView's servers (TDVA-equivalent), no API key needed in desktop client
@@ -120,16 +227,16 @@ polling (see `docs/supabase_egress_assessment.md`).
 
 ### Risks
 | Risk | Mitigation |
-|---|---|
+|---|---||
 | **TradingView lightweight-charts CDN fails to load** | **FIXED 2026-08-17**: SVG mini-chart fallback (`<SvgMiniChart>`) renders inside every canvas div when `tvReady` is false — charts are ALWAYS visible regardless of CDN availability. The SVG renders static candle data as an inline `<svg>` with colored stroke (green/red) + shaded area. If lightweight-charts loads, it takes over the canvas (SVG hidden). This mirrors the `tonbistudio/hermes-desktop-plugins` markets plugin pattern.
-| Chart canvas memory leak (many canvases) | Store chart refs in a `Map<symbol, IChartApi>`, destroy on unmount via cleanup function |
-| Desktop + dashboard drift | Same `TalariaWatchlist` component + tab logic defined identically in both plugin.js patterns (React.createElement in desktop, h() in dashboard IIFE) |
+|| Chart canvas memory leak (many canvases) | Store chart refs in a `Map<symbol, IChartApi>`, destroy on unmount via cleanup function |
+|| Desktop + dashboard drift | Same `TalariaWatchlist` component + tab logic defined identically in both plugin.js patterns (React.createElement in desktop, h() in dashboard IIFE) |
 
 ### Files Changed (scoped to `noble-trader-talaria`)
-| `plugins/talaria/desktop/plugin.js` — tab restructure + watchlist component + TDVA candle fetching + cancellation race fix |
-| `plugins/talaria/desktop/test_talaria_render_harness.mjs` — stubs (LightweightCharts, AbortSignal, TDVA candles) + assertions updated for Analysis tab source-level checks + watchlist chart assertions |
-| `plugins/talaria/dashboard/dist/index.js` — mirror tab restructure + watchlist + TDVA candle fetching + cancellation race fix |
-| `plugins/talaria/dashboard/dist/style.css` — tab bar + watchlist row CSS |
+|| `plugins/talaria/desktop/plugin.js` — tab restructure + watchlist component + TDVA candle fetching + cancellation race fix |
+|| `plugins/talaria/desktop/test_talaria_render_harness.mjs` — stubs (LightweightCharts, AbortSignal, TDVA candles) + assertions updated for Analysis tab source-level checks + watchlist chart assertions |
+|| `plugins/talaria/dashboard/dist/index.js` — mirror tab restructure + watchlist + TDVA candle fetching + cancellation race fix |
+|| `plugins/talaria/dashboard/dist/style.css` — tab bar + watchlist row CSS |
 
 ## [v0.2.10] — 2026-08-15
 
@@ -204,11 +311,11 @@ panel. All three have been pulled out to a single standalone panel positioned
 below the Markov + pattern card in all three plugin surfaces, matching the
 dashboard screenshot layout (EV | P_win | TimesFM side-by-side).
 
-| Surface | File | Change |
-|---------|------|--------|
-| Talaria desktop | `plugins/talaria/desktop/plugin.js` | EV + P_win + TimesFM in one standalone panel; removed from below-table context |
-| Admin desktop | `noble-trader-hermes-plugins/.hermes/plugins/noble-trader-admin/desktop/plugin.js` | Same consolidation |
-| Talaria dashboard | `plugins/talaria/dashboard/dist/index.js` | Added Markov + pattern card + EV/P_win/TimesFM panel |
+|| Surface | File | Change |
+||---------|------|--------|
+|| Talaria desktop | `plugins/talaria/desktop/plugin.js` | EV + P_win + TimesFM in one standalone panel; removed from below-table context |
+|| Admin desktop | `noble-trader-hermes-plugins/.hermes/plugins/noble-trader-admin/desktop/plugin.js` | Same consolidation |
+|| Talaria dashboard | `plugins/talaria/dashboard/dist/index.js` | Added Markov + pattern card + EV/P_win/TimesFM panel |
 
 ### Added
 
@@ -268,7 +375,7 @@ plugin (`desktop/plugin.js`), mirroring the kanban board's dual-plugin pattern.
   all dashboard components.
 - **`dashboard/dist/style.css`** — prefixed `tla-` stylesheet.
 - **`dashboard/plugin_api.py`** — FastAPI router at `/api/plugins/talaria/`.
-  Optional proxy endpoints: `/health`, `/config`, `/claim-check`, `/symbols`,
+  Optional proxy Endpoints: `/health`, `/config`, `/claim-check`, `/symbols`,
   `/sweeps/latest`, `/signals/count`.
 
 ### Verification
@@ -405,6 +512,88 @@ sync.
 
 - Talaria plugin: `0.2.3` → `0.2.4`
 
+## [v0.2.4] — 2026-08-14
+
+### Summary
+
+Widget multi-placement + placement root-cause + delivery-chain watchdog.
+
+### Fixed
+
+- **Widget placement root cause** — the pane appeared in the LEFT sidebar after
+  reload/layout changes because the app's persisted layout tree held the pane
+  inside `grp-sessions`. Remedy: run ⌘K → Reset layout once to restore the
+  right dock. Fix requires app-level change to `adoptMissingPanes` (honor
+  `data.dock`) — outside plugin repos.
+- **Deploy drift** — the multi-placement build (`@container` rules in
+  `.tla-pane-root`) was never deployed to root + all 3 Electron homes. Root
+  copy re-synced from desktop + re-deployed; all copies byte-verified.
+
+### Changed
+
+- **Talaria widget multi-placement** — default dock stays **right of the chat**
+  (`placement: 'right'` + `dock: { pane: 'workspace', pos: 'right' }` +
+  `width: '300px'`), but the pane now adapts to ANY zone:
+  - `.tla-pane-root` declares `container-type: inline-size` (container-query host)
+  - New `@container (min-width: 560px)` rules: row list → two-column grid,
+    last-signal card + price line flatten to a single row
+  - <560px keeps the compact single column
+- **Talaria plugin (`desktop/plugin.js`)** — `startSignalPolling()` poll catch
+  block now logs errors via `_log('error', ...)` instead of silently swallowing.
+- **Talaria plugin (`desktop/plugin.js`)** — `register(ctx)` now wraps
+  `ctx.registerMany()` in try/catch with validation.
+
+### Added
+
+- `talaria_delivery_health.py` + cron `talaria-delivery-health` (every 30m, no_agent) —
+  delivery-chain watchdog watching signals → toast → widget path.
+
+### Tests
+
+- Harness: default-dock-width + responsive-CSS contract assertions +
+  placement: 'default' / onDismiss assertions. All PASS.
+
+### Verification
+
+- Live monitor run (healthy): sweep 2.7m ago, qualified_ttl=4, plugin
+  164969B/659e321bd6f3, store fresh.
+- Qualified signals confirmed live: EURUSD, XAUUSD, XAGUSD, US500 (all q=true, within TTL).
+- `talaria-unread.json` store confirmed persisting.
+- Harness PASS + `node --check` OK after deploy sync; all 3 homes byte-verify.
+
 ## [v0.2.3] — 2026-08-07
 
-Plan-scoped realtime channels + channel rename.
+**Plan-scoped realtime channels + channel rename.**
+
+- **Plan-scoped signal broadcasts**: signals are now published per plan:
+  `realtime:signals.signal_scout` (Scout's symbols) and
+  `realtime:signals.precision_pro` (Pro's symbols). The backend routes each
+  signal to the topic(s) matching the symbol's plan membership; the plugin joins
+  only its own plan's topic (decided by the server-validated claim — never
+  client-guessed). Pro subscribers receive Scout + Pro symbols; Scout
+  subscribers receive only their 10.
+- **`realtime:paper` → `realtime:portfolio`**: the paper-validation channel was
+  renamed. It carries the **simulated validation book** (positions the engine
+  would have taken, realized PnL, equity ticks) — not a demo trading account.
+  Topic is now `realtime:portfolio` (Precision Pro only).
+- **Fail-open routing**: if a symbol's plan membership can't be resolved, the
+  signal is published to **both** plan topics so no subscriber misses it.
+  Unknown plan claims also join both topics.
+- **Widget display order + dedup**: the signals pane now renders
+  **most-recent-at-top** (newest first, always), the pinned card shows the
+  actual newest signal, and a signal **never renders twice** (the card's signal
+  is excluded from the list). Badge counts all live signals.
+- **Date/Time columns in user locale**: the Paper portfolio table's timestamp
+  column is now Date/Time in your local timezone instead of raw UTC.
+
+## [v0.2.2] — 2026-08-06
+
+### Components
+|| Component | What it is |
+||---|---||
+|| **Talaria desktop plugin** | Native Hermes Desktop page: live hot signals, renko brick charts (hover for prices), per-symbol signal health, paper book + portfolio analytics, 60s auto-refresh + realtime updates. **v0.2.2 widget:** live qualified-signal badge (pane shows `N live`, chip shows `Talaria · N`), ENTRY/SL/TP pricing on EVERY displayed signal, ENTRY price in toasts, 10-min TTL hot-signal count, plugin version shown in footers |
+|| **talaria-tools** | In-chat agent tools — `talaria_health`, `talaria_stats`, `talaria_calibration` — so your Hermes agent can answer "what does this signal mean?" |
+|| **talaria-client skill** | A skill your agent installs to explain signals, history, calibration, and paper-vs-equal-weight in plain language |
+|| **talaria-trade skill** | A skill your agent uses to execute live 0.01-lot BUY/SELL orders from Talaria signals into the MT5 web trader via the Hermes in-app browser (auto/semi/manual modes) |
+|| **Signal notifier + daily digest** | Optional Hermes cron scripts that deliver new signals to whatever messaging you've connected |
+|| **Supabase migrations** | The read-only views/tables the plugin reads (anon RLS — subscribers can only SELECT) |

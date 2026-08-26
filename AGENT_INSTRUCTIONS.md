@@ -75,19 +75,6 @@ After deploy: restart the desktop app (or ⌘K → *Reload desktop plugins*). Th
 > All scripts are pure stdlib (no project deps). Run via Hermes cron with:
 > `C:\Users\aloys\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe`
 
-## Pricing Models & UUIDs
-| Plan | Symbols | Live UUID |
-|---|---|---|
-| Signal Scout | 10 | `df980ef1-e41f-41db-9d04-2ad09da69626` |
-| Precision Pro | 20 | `1b66e78e-e8d1-46b6-9887-b36e038131c5` |
-| Basket Scalper | — | `479635b8-8d1f-40b2-9692-fd0118f72e7a` (plan-only, engine TBD) |
-
-## Live Data Source
-The plugin connects directly to Supabase with the **anon key** (`sb_publishable_...`). The data path:
-- **Signals** → `nt_sweep_result` (RLS: `signals` public, `paper` Pro-only)
-- **Paper portfolio** → `v_talaria_portfolio_stats` (Pro-only, RLS)
-- **Calibration** → `v_talaria_calibration_stats`
-
 ## talaria-tools Zero-Config (2026-08-13)
 `talaria-tools` now embeds `DEFAULT_SUPABASE_URL` + `DEFAULT_ANON_KEY` (same public values as `plugin.js`). Env overrides are optional; "not configured" guards have been removed. Do NOT advise setting `TALARIA_SUPABASE_*` env vars.
 
