@@ -3,6 +3,36 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.19] — 2026-08-26
+
+### Summary
+**Signal health scoreboard cleanup + version drift fix.** Removes the "sig"
+pill badge from the scoreboard table and corrects version drift on the flat
+`plugin.js` copy.
+
+### Changed
+- **Signal health scoreboard** — Removed the `'sig'` pill badge (`<span
+  class="tla-badge tla-hot-chip">sig</span>`) from the Symbol column in the
+  scoreboard table. The BH-FDR significance calculation still runs (via
+  `fdrBySym`) but is no longer rendered as a visual badge. The `r.symbol`
+  cell now renders plain text only.
+- **Version drift** — The root `plugin.js` flat copy was stuck at v0.2.16
+  (never synced from the v0.2.18 desktop version). Bumped to v0.2.19 in sync
+  with `desktop/plugin.js`. The in-plugin upgrade-banner harness mock was
+  bumped to v0.2.20 so the check stays strictly ahead of the deployed version.
+
+### Deploy
+- Release zip: `talaria-plugin-v0.2.19.zip`
+- Includes `plugins/talaria/desktop/plugin.js`, `plugins/talaria/plugin.js`,
+  `plugins/talaria/desktop/test_talaria_render_harness.mjs`,
+  `scripts/talaria_delivery_health.py`
+
+### Verification
+- `node plugins/talaria/desktop/test_talaria_render_harness.mjs` — all PASS
+- `node --check plugins/talaria/desktop/plugin.js` — PASS
+- `node --check plugins/talaria/plugin.js` — PASS
+- No `'sig'` badge references remain in any plugin.js copy
+
 ## [v0.2.18] — 2026-08-26
 
 ### Summary

@@ -12,6 +12,9 @@ plugin) for live data. This backend layer provides:
   POST /api/plugins/talaria/claim-check     — proxy for talaria-check Edge Function
   GET  /api/plugins/talaria/symbols         — proxy: nt_symbol list for a plan
   GET  /api/plugins/talaria/sweeps/latest   — proxy: latest sweep results
+  GET  /api/plugins/talaria/signals/count   — proxy: count qualified signals in window
+  POST /api/plugins/talaria/signal-cache  — write latest signal to JSON file
+  GET  /api/plugins/talaria/signal-cache  — read latest signal from JSON file
 
 Security: plugin HTTP routes go through the dashboard's session-token
 auth middleware (web_server.auth_middleware) just like core API routes.
@@ -30,6 +33,7 @@ import json
 import logging
 import os
 import urllib.parse
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -336,3 +340,58 @@ async def signals_count(minutes: int = Query(60, ge=1, le=1440)):
 
     count_str = resp.headers.get("X-Total-Count", "0")
     return {"count": int(count_str) if count_str.isdigit() else 0, "minutes": minutes}
+
+
+# ─── Signal cache (agent-readable) ──────────────────────────────────────
+# Writes a JSON snapshot of the latest signal to the OS filesystem so the
+# Hermes agent can read exact entry/SL/TP/Kelly values without DOM scraping
+# or vision OCR. Mounted via the same /api/plugins/talaria/ prefix.
+#
+# Files are NOT created in git — they are runtime caches written to
+# ~/.hermes/talaria/latest_signal.json at runtime.
+
+SIGNAL_CACHE_DIR = Path(os.path.expanduser("~/.hermes/talaria"))
+SIGNAL_CACHE_FILE = SIGNAL_CACHE_DIR / "latest_signal.json"
+
+
+class SignalCacheRequest(BaseModel):
+    symbol: str
+    direction: str
+    kelly: float | None = None
+    regime: str | None = None
+    entry: float | None = None
+    sl: float | None = None
+    tp: float | None = None
+    ts: str | None = None
+    cached_at: str | None = None
+
+
+@router.post("/signal-cache")
+async def write_signal_cache(req: SignalCacheRequest):
+    """Write latest signal data to JSON file on OS filesystem."""
+    try:
+        SIGNAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        data = req.model_dump()
+        SIGNAL_CACHE_FILE.write_text(
+            json.dumps(data, indent=2), encoding="utf-8"
+        )
+        log.info(f"Signal cache written: {req.symbol} @ {req.entry}")
+        return JSONResponse({"ok": True, "path": str(SIGNAL_CACHE_FILE)})
+    except Exception as e:
+        log.error(f"Failed to write signal cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/signal-cache")
+async def read_signal_cache():
+    """Read latest signal data from JSON file."""
+    try:
+        if not SIGNAL_CACHE_FILE.exists():
+            raise HTTPException(status_code=404, detail="No signal cache found")
+        data = json.loads(SIGNAL_CACHE_FILE.read_text(encoding="utf-8"))
+        return JSONResponse(data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Failed to read signal cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

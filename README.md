@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Talaria-Noble%20Trading%20Signals-4c9aff" alt="Talaria" />
-  <img src="https://img.shields.io/badge/plugin-v0.2.18-16a34a" alt="v0.2.18" />
+  <img src="https://img.shields.io/badge/plugin-v0.2.19-16a34a" alt="v0.2.19" />
   <img src="https://img.shields.io/badge/status-live-16a34a" alt="live" />
   <img src="https://img.shields.io/badge/plugin-Hermes%20Desktop-888" alt="Hermes Desktop" />
 </p>
@@ -32,26 +32,21 @@ action behind each signal:
 
 ---
 
-## What's in this release (v0.2.18)
+## What's in this release (v0.2.19)
 
-**Fix release** — restores all surfaces after the 2026-08-24 shared-logic consolidation,
-plus user-requested refinements.
+**Fix release** — removes the "sig" pill from the Signal health scoreboard
+table, fixes version drift on the flat plugin copy, and corrects the
+`sigHealthRows || []` crash guard.
 
 See [CHANGELOG.md](CHANGELOG.md) for full historical release notes.
 
-|| Area | What changed |
-||---|---|
-|| **Crash on load** | Fixed `ensureStyle is not defined` — the shared-logic IIFE was scoping shared declarations away from plugin bodies. Both desktop + dashboard plugins now load correctly. |
-|| **Supabase queries** | All REST queries were missing the `/rest/v1/` prefix — now fixed. Symbols, sweeps, calibration, portfolio stats all query correctly again. |
-|| **Token rotation** | New "Use a different token" link on the expired/cancelled subscription screen — no need to wait for an automatic error to re-enter a claim token. |
-|| **Calibration bias** | Raw bias/status now shown as a delta (Δ = raw − enforced) under the enforced cell — see both the masked model and true drift at once. |
-|| **Qualified signals card** | Removed the redundant stat card — the count lives in the statusbar chip, toast, and widget pane badge already. |
-|| **Polling optimization** | `DATA_POLL_MS` reduced to 5 min when Realtime WebSocket is active (-80% egress per user/day). |
-|| **TradingView symbols** | Dynamic symbol mapping — fixes `FOREXCOM:US500` → `PEPPERSTONE:US500` and other retagged indices. |
-|| **Widget multi-placement** | Signals pane docks right of chat by default; adapts to any zone via CSS container queries. |
-|| **TalariaMark** | Bronze broad-bolt logo now in all header surfaces (desktop + dashboard). |
+||| Area | What changed |
+|||---|---||
+||| **Signal health scoreboard** | Removed the "sig" pill badge from the Symbol column — significance is still computed (BH-FDR correction) but no longer rendered as a visual badge in the table. |
+||| **Version drift (flat plugin.js)** | The root `plugin.js` was stuck at v0.2.16 (never synced from v0.2.18). Now bumped to v0.2.19 in sync with `desktop/plugin.js`. |
+||| **Upgrade banner** | Harness mock bumped to v0.2.20 so the in-plugin upgrade-banner check stays strictly ahead of the deployed version. |
 
-**Deploy:** `talaria-plugin-v0.2.18.zip` release archive available.
+**Deploy:** `talaria-plugin-v0.2.19.zip` release archive available.
 
 ---
 
@@ -89,8 +84,8 @@ launch it once so your home directory is created.
 from its `desktop-plugins` directory:
 
 ```bash
-# Download talaria-plugin-v0.2.18.zip from the Releases tab, then:
-unzip talaria-plugin-v0.2.18.zip
+# Download talaria-plugin-v0.2.19.zip from the Releases tab, then:
+unzip talaria-plugin-v0.2.19.zip
 SRC=talaria/plugin.js
 for d in \
   "$HOME/AppData/Local/hermes/desktop-plugins/talaria" \

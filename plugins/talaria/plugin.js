@@ -35,6 +35,18 @@ const DAISY_CSS = `
 .nta-join{display:inline-flex;flex-wrap:wrap;gap:.25rem;margin:-.125rem}
 .tla-join-item,
 .nta-join-item{display:inline-flex}
+.tla-donut-wrap{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;width:80px;height:80px;}
+.tla-donut-svg{display:block;}
+.tla-donut-label{font-size:9px;color:var(--ui-text-secondary,#aaa);margin-top:4px;text-align:center;font-variant-numeric:tabular-nums;}
+.tla-line-svg{display:block;width:100%;height:auto;}
+
+/* Tab buttons — Market & Analysis selector in Talaria */
+.tla-tabs{display:flex;gap:6px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);padding-bottom:4px;margin-bottom:8px;-webkit-app-region:no-drag}
+.tla-tab-btn{background:transparent;border:1px solid transparent;border-bottom:none;border-top-left-radius:6px;border-top-right-radius:6px;padding:6px 14px;font-size:12px;font-weight:500;color:var(--ui-text-secondary,#888);cursor:pointer;transition:all 0.15s ease;-webkit-app-region:no-drag}
+.tla-tab-btn:hover{background:var(--ui-hover,#2a2a2a);color:var(--ui-text-primary,#e0e0e0)}
+.tla-tab-active{background:var(--ui-panel-bg,#1e1e1e);color:var(--ui-text-primary,#e0e0e0);border-color:var(--ui-stroke-secondary,#2a2a2a);border-bottom:1px solid var(--ui-panel-bg,#1e1e1e);margin-bottom:-1px}
+.tla-brick-btn{background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--ui-text-secondary,#888);cursor:pointer}
+.tla-brick-btn-active{background:var(--ui-accent,#4c9aff);color:var(--ui-text-primary,#fff)}
 `
 
 import React from 'react'
@@ -141,6 +153,16 @@ function fmtRegime(label) {
   if (!label) return '—'
   const key = String(label).toLowerCase()
   if (REGIME_FRIENDLY[key]) return REGIME_FRIENDLY[key]
+  // Handle volatility-tier prefixes (low_/high_/med_) by stripping the prefix
+  // and looking up the base regime key, then re-injecting the tier label.
+  const tierMatch = key.match(/^(low_|high_|med_)/)
+  if (tierMatch) {
+    const base = key.slice(tierMatch[0].length)
+    if (REGIME_FRIENDLY[base]) {
+      const tierWord = { low_: 'Low-vol', high_: 'High-vol', med_: 'Med-vol' }[tierMatch[0]]
+      return REGIME_FRIENDLY[base].replace(/Low-vol|High-vol/, tierWord)
+    }
+  }
   return String(label).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
@@ -224,8 +246,20 @@ function fmtBrickPrice(n) {
 
 function brickPattern(dirs) {
   if (!dirs || !dirs.length) return ''
-  return dirs.map((d) => (d > 0 ? 'U' : 'D')).join('').replace(/(.)\1+/g, '$1')
+  return dirs.map((d) => (typeof d === 'object' ? (Number(d.close_price) > Number(d.open_price) ? 1 : -1) : d)).map((d) => (d > 0 ? 'U' : 'D')).join('').replace(/(.)\1+/g, '$1')
 }
+function patternLabel(pattern) {
+  if (!pattern || !pattern.length) return '—'
+  if (pattern === 'UUU') return '3-push up 📈'
+  if (pattern === 'DDD') return '3-push down 📉'
+  if (pattern === 'UD') return 'Reversal ↑↓'
+  if (pattern === 'DU') return 'Reversal ↓↑'
+  if (pattern === 'UDU') return 'Pullback ↑↓↑'
+  if (pattern === 'DUD') return 'Pullback ↓↑↓'
+  if (/^(UD)+$/.test(pattern) || /^(DU)+$/.test(pattern)) return 'Choppy ↕'
+  return 'Mixed (' + pattern + ')'
+}
+
 
 function aggregateToMonths(dailyRows, months) {
   if (!dailyRows || !dailyRows.length) return []
@@ -399,37 +433,82 @@ function StatCard({ title, value, sub, tone }) {
   )
 }
 
-function Donut({ label, value, total }) {
-  const pct = total > 0 ? (value / total) * 100 : 0
-  return React.createElement('div', { className: 'tla-donut-wrap' },
-    React.createElement('svg', { width: 34, height: 34, viewBox: '0 0 34 34' },
-      React.createElement('circle', {
-        cx: 17, cy: 17, r: 14, strokeWidth: 3.4, fill: 'none',
-        stroke: 'var(--ui-stroke-secondary)',
-      }),
-      React.createElement('circle', {
-        cx: 17, cy: 17, r: 14, strokeWidth: 3.4, fill: 'none',
-        stroke: 'var(--ui-accent)', strokeDasharray: pct + ' ' + (100 - pct),
-        style: { transform: 'rotate(-90deg)', transformOrigin: '50% 50%' },
-      })
+// DonutChart — multi-segment donut for outcome distribution.
+// Accepts { data: [{ label, value, color }] }.
+// Each segment renders as a stroke-dasharray arc; colors are passed per-item.
+function DonutChart({ data, size = 80, hole = 32 }) {
+  const total = (data || []).reduce((sum, d) => sum + (Number(d.value) || 0), 0)
+  if (!total || !data || !data.length) {
+    return React.createElement('div', { className: 'tla-donut-wrap', style: { width: size, height: size } },
+      React.createElement('svg', { width: size, height: size, className: 'tla-donut-svg', viewBox: '0 0 100 100' },
+        React.createElement('circle', {
+          cx: 50, cy: 50, r: 30, strokeWidth: 6, fill: 'none',
+          stroke: 'var(--ui-stroke-secondary,#2a2a2a)',
+        })
+      )
+    )
+  }
+  const radius = 32
+  const strokeWidth = 8
+  const circumference = 2 * Math.PI * radius
+  const segments = []
+  let runningStart = 0
+  for (const d of data) {
+    const pct = (Number(d.value) || 0) / total
+    const dashLen = pct * circumference
+    const offset = circumference * runningStart
+    segments.push({
+      label: d.label,
+      value: d.value,
+      color: d.color || 'var(--ui-accent,#4c9aff)',
+      dashLen,
+      offset,
+    })
+    runningStart += pct
+  }
+  const svgW = size
+  const svgH = size
+  const cy = svgW / 2
+  const r = radius
+  return React.createElement('div', { className: 'tla-donut-wrap', style: { width: size, height: size } },
+    React.createElement('svg', { width: svgW, height: svgH, className: 'tla-donut-svg', viewBox: `0 0 ${svgW} ${svgH}` },
+      segments.map((s, i) =>
+        React.createElement('circle', {
+          key: i,
+          cx: cy, cy: cy, r: r, strokeWidth: strokeWidth, fill: 'none',
+          stroke: s.color,
+          strokeDasharray: s.dashLen + ' ' + circumference,
+          strokeDashoffset: -s.offset,
+          style: { transform: 'rotate(-90deg)', transformOrigin: '50% 50%' },
+        })
+      )
     ),
-    React.createElement('span', { className: 'tla-donut-label' }, label)
+    React.createElement('span', { className: 'tla-donut-label' }, data.length > 1 ? 'Distribution' : (data[0]?.label || '—'))
   )
 }
 
-function LineChart({ points, color }) {
+// Preserve Donut alias for any legacy call sites using the old single-segment API.
+const Donut = DonutChart
+
+// LineChart — accepts { points, color, height, labels }.
+// points may be number[] or {y: number}[].
+// height overrides the default 60; labels is accepted for future axis use
+// (chart width scales with label count to maintain ~30px minimum per point).
+function LineChart({ points, color, height, labels }) {
   if (!points || !points.length) return null
-  const vals = points.map((p) => p.y)
+  // Normalize: accept plain numbers OR { y: n } objects.
+  const vals = points.map((p) => typeof p === 'number' ? p : (p && p.y != null ? p.y : 0))
   const min = Math.min(...vals); const max = Math.max(...vals)
   const rng = max - min || 1
-  const h = 60; const w = 160; const pad = 4
-  const pts = points.map((p, i) => {
-    const x = (i / (points.length - 1 || 1)) * (w - pad * 2) + pad
-    const y = h - pad - ((p.y - min) / rng) * (h - pad * 2)
+  const h = height || 60; const pad = 4
+  const w = Math.max(160, labels && labels.length ? labels.length * 30 : vals.length * 12)
+  const pts = vals.map((v, i) => {
+    const x = (i / (vals.length - 1 || 1)) * (w - pad * 2) + pad
+    const y = h - pad - ((v - min) / rng) * (h - pad * 2)
     return [x.toFixed(1), y.toFixed(1)].join(',')
   }).join(' ')
   return React.createElement('svg', { width: w, height: h, className: 'tla-line-svg' },
-    React.createElement('polyline', { points: pts, fill: 'none', stroke: color || 'var(--ui-accent)', strokeWidth: 2 })
+    React.createElement('polyline', { points: pts, fill: 'none', stroke: color || 'var(--ui-accent,#4c9aff)', strokeWidth: 2 })
   )
 }
 
@@ -646,6 +725,84 @@ function ensureStyle(styleId, customCss) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // shared-logic.js — single source of truth for logic duplicated (and drifted)
 // between noble-trader-admin and talaria desktop plugins.
 //
@@ -810,7 +967,7 @@ const POSTHOG_API_HOST = 'https://us.i.posthog.com'
 //        re-renders even on re-seen (ts <= watermark) rows.
 // 0.2.13: (user correction 2026-08-19) fixed wrong workspace path in docs
 // 0.2.14: Phase 2 — in-plugin version check banner (upgrade notice via GitHub Releases API)
-const PLUGIN_VERSION = '0.2.16'
+const PLUGIN_VERSION = '0.2.19'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -1257,20 +1414,20 @@ function TalariaKellyTable({ sweeps, symbols }) {
               const kellyVal = Number(r.effective_kelly != null ? r.effective_kelly : r.kelly_f) || 0
               return React.createElement('tr', { key: r.symbol + '|' + (r.sweep_timestamp || ''), className: 'tla-kelly-row' },
                 React.createElement('td', { className: 'tla-k' }, r.symbol),
-              React.createElement('td', { className: 'tla-regime-cell', style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? 'var(--ui-danger,#ff5c5c)' : 'var(--ui-text-tertiary)' } }, fmtRegime(r.regime)),
+              React.createElement('td', { className: 'tla-regime-cell', style: { color: isBuy ? 'var(--ui-accent)' : isSell ? 'var(--ui-danger)' : 'var(--ui-text-tertiary)' } }, fmtRegime(r.regime)),
               React.createElement('td', { className: 'tla-agg-cell' }, fmtAggression(r.aggression)),
               React.createElement('td', { className: 'tla-pwin-cell', style: { color: fmtPwinColor(r.markov_p_up) } }, Number(r.markov_p_up) != null ? fmtKellyPct(r.markov_p_up) : '—'),
               React.createElement('td', { className: 'tla-pwin-cell', style: { color: fmtPwinColor(r.markov_p_dn) } }, Number(r.markov_p_dn) != null ? fmtKellyPct(r.markov_p_dn) : '—'),
               React.createElement('td', { className: 'tla-shift-cell' }, r.regime_shift ? '⚡' : '—'),
               React.createElement('td', { className: 'tla-prev-cell' }, fmtRegimeShort(r.prev_regime)),
-              React.createElement('td', { className: cn('tla-sig-cell', isBuy ? 'tla-pos' : isSell ? 'tla-neg' : ''), style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? 'var(--ui-danger,#ff5c5c)' : 'var(--ui-text-tertiary)' } }, sig === 'neutral' || !sig ? '—' : sig.toUpperCase()),
-              React.createElement('td', { className: 'tla-kelly-cell', style: { color: isBuy ? 'var(--ui-accent,#4c9aff)' : isSell ? 'var(--ui-danger,#ff5c5c)' : 'var(--ui-text-tertiary)' } }, kellyVal.toFixed(3)),
+              React.createElement('td', { className: cn('tla-sig-cell', isBuy ? 'tla-pos' : isSell ? 'tla-neg' : ''), style: { color: isBuy ? 'var(--ui-accent)' : isSell ? 'var(--ui-danger)' : 'var(--ui-text-tertiary)' } }, sig === 'neutral' || !sig ? '—' : sig.toUpperCase()),
+              React.createElement('td', { className: 'tla-kelly-cell', style: { color: isBuy ? 'var(--ui-accent)' : isSell ? 'var(--ui-danger)' : 'var(--ui-text-tertiary)' } }, kellyVal.toFixed(3)),
               React.createElement('td', { className: 'tla-kelly-fCell' }, Number(r.kelly_f) != null ? Number(r.kelly_f).toFixed(3) : '—'),
               React.createElement('td', { className: 'tla-pwin-cell', style: { color: fmtPwinColor(r.p_win) } }, Number(r.p_win) != null ? fmtKellyPct(r.p_win) : '—'),
               React.createElement('td', { className: 'tla-ev-cell', style: { color: fmtEvColor(r.ev) } }, Number(r.ev) != null ? '$' + Number(r.ev).toFixed(2) : '—'),
               React.createElement('td', { className: 'tla-price-cell' }, Number(r.entry_price) > 0 ? fmtBrickPrice(r.entry_price) : '—'),
-              React.createElement('td', { className: 'tla-price-cell', style: { color: 'var(--ui-danger,#ff5c5c)' } }, Number(r.stop_loss) > 0 ? fmtBrickPrice(r.stop_loss) : '—'),
-              React.createElement('td', { className: 'tla-price-cell', style: { color: 'var(--ui-accent,#4c9aff)' } }, Number(r.take_profit) > 0 ? fmtBrickPrice(r.take_profit) : '—'),
+              React.createElement('td', { className: 'tla-price-cell', style: { color: 'var(--ui-danger)' } }, Number(r.stop_loss) > 0 ? fmtBrickPrice(r.stop_loss) : '—'),
+              React.createElement('td', { className: 'tla-price-cell', style: { color: 'var(--ui-accent)' } }, Number(r.take_profit) > 0 ? fmtBrickPrice(r.take_profit) : '—'),
               React.createElement('td', { className: 'tla-conf-cell' }, Number(r.regime_conf) != null ? (r.regime_conf * 100).toFixed(0) + '%' : '—'),
               React.createElement('td', { className: 'tla-conf-cell' }, (r.p_timesfm != null && r.p_timesfm !== '') ? fmtKellyPct(r.p_timesfm) : '—'),
               React.createElement('td', { className: 'tla-sizemult-cell' }, Number(r.size_mult) != null ? '×' + Number(r.size_mult).toFixed(2) : '—'),
@@ -1671,108 +1828,108 @@ const STYLE_ID = 'talaria-style'
 // equivalent and is restored verbatim.
 const CSS = `
 .tla-root{display:flex;flex-direction:column;height:100%;gap:12px;padding:16px;overflow:auto;}
-.tla-header{display:flex;align-items:center;justify-content:center;padding:10px 0 2px;font-size:1.15rem;font-weight:600;letter-spacing:.02em;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);margin-bottom:2px;gap:8px;}
+.tla-header{display:flex;align-items:center;justify-content:center;padding:10px 0 2px;font-size:1.15rem;font-weight:600;letter-spacing:.02em;border-bottom:1px solid var(--ui-stroke-secondary);margin-bottom:2px;gap:8px;}
 .tla-mark{display:inline-block;flex-shrink:0;}
 .tla-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
-.tla-card{background:var(--ui-panel,#161616);border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;}
-.tla-card h3{margin:0;font-size:12px;font-weight:600;color:var(--ui-text-secondary,#999);text-transform:uppercase;letter-spacing:0.04em;}
-.tla-card .tla-value{font-size:26px;font-weight:700;color:var(--ui-text-primary,#eee);}
-.tla-card .tla-sub{font-size:11px;color:var(--ui-text-quaternary,#777);}
+.tla-card{background:var(--ui-panel);border:1px solid var(--ui-stroke-secondary);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;}
+.tla-card h3{margin:0;font-size:12px;font-weight:600;color:var(--ui-text-secondary);text-transform:uppercase;letter-spacing:0.04em;}
+.tla-card .tla-value{font-size:26px;font-weight:700;color:var(--ui-text-primary);}
+.tla-card .tla-sub{font-size:11px;color:var(--ui-text-quaternary);}
 .tla-row{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12px;}
-.tla-row .tla-k{color:var(--ui-text-tertiary,#888);}
-.tla-row .tla-v{color:var(--ui-text-primary,#eee);font-variant-numeric:tabular-nums;}
-.tla-pos{color:var(--ui-accent,#4c9aff);}
-.tla-neg{color:var(--ui-danger,#ff5c5c);}
-.tla-table .tla-sm{font-size:9px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;white-space:nowrap;}
-.tla-kelly-table .tla-regime-cell{font-size:14px;font-weight:600;}
-.tla-kelly-table .tla-agg-cell{font-size:13px;font-weight:600;}
-.tla-kelly-table .tla-sig-cell{font-size:13px;font-weight:700;text-transform:uppercase;}
-.tla-kelly-table .tla-kelly-cell{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-kelly-fCell{font-size:9px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-pwin-cell{font-size:11px;font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-ev-cell{font-size:11px;font-variant-numeric:tabular-nums;}
+.tla-row .tla-k{color:var(--ui-text-tertiary);}
+.tla-row .tla-v{color:var(--ui-text-primary);font-variant-numeric:tabular-nums;}
+.tla-pos{color:var(--ui-accent);}
+.tla-neg{color:var(--ui-danger);}
+.tla-table .tla-sm{font-size:9px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.tla-kelly-table .tla-regime-cell{font-size:12px;font-weight:600;}
+.tla-kelly-table .tla-agg-cell{font-size:12px;font-weight:600;}
+.tla-kelly-table .tla-sig-cell{font-size:12px;font-weight:700;text-transform:uppercase;}
+.tla-kelly-table .tla-kelly-cell{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-kelly-fCell{font-size:10px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-pwin-cell{font-size:10px;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-ev-cell{font-size:10px;font-variant-numeric:tabular-nums;}
 .tla-kelly-table .tla-price-cell{font-size:10px;font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-conf-cell{font-size:10px;color:var(--ui-text-tertiary,#888);font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-ts-cell{font-size:9px;color:var(--ui-text-tertiary,#888);font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-shift-cell{font-size:12px;text-align:center;}
-.tla-kelly-table .tla-prev-cell{font-size:11px;color:var(--ui-text-secondary,#aaa);}
-.tla-kelly-table .tla-sizemult-cell{font-size:9px;color:var(--ui-text-secondary,#aaa);}
-.tla-kelly-table .tla-group-header td{font-size:11px;font-weight:600;color:var(--ui-text-tertiary,#888);border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+.tla-kelly-table .tla-conf-cell{font-size:10px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-ts-cell{font-size:10px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-shift-cell{font-size:10px;text-align:center;}
+.tla-kelly-table .tla-prev-cell{font-size:10px;color:var(--ui-text-secondary);}
+.tla-kelly-table .tla-sizemult-cell{font-size:10px;color:var(--ui-text-secondary);}
+.tla-kelly-table .tla-group-header td{font-size:11px;font-weight:600;color:var(--ui-text-tertiary);border-bottom:1px solid var(--ui-stroke-secondary);}
 .tla-kelly-table-wrap{overflow-x:auto;}
 .tla-context-card .tla-context-value{font-size:20px;font-weight:700;}
-.tla-context-card .tla-context-sub{font-size:10px;color:var(--ui-text-quaternary,#777);}
-.tla-badge.open{background:rgba(120,220,120,0.15);color:#78dc78;}
-.tla-badge.closed{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}
-.tla-badge.opened{background:rgba(76,154,255,0.15);color:var(--ui-accent,#4c9aff);}
-.tla-badge.equity{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary,#888);}
-.tla-badge.active{background:rgba(120,220,120,0.15);color:#78dc78;}
-.tla-badge.grace{background:rgba(240,180,60,0.15);color:#f0b43c;}
+.tla-context-card .tla-context-sub{font-size:10px;color:var(--ui-text-quaternary);}
+.tla-badge.open{background:rgba(120,220,120,0.15);color:var(--ui-success);}
+.tla-badge.closed{background:rgba(76,154,255,0.15);color:var(--ui-accent);}
+.tla-badge.opened{background:rgba(76,154,255,0.15);color:var(--ui-accent);}
+.tla-badge.equity{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary);}
+.tla-badge.active{background:rgba(120,220,120,0.15);color:var(--ui-success);}
+.tla-badge.grace{background:rgba(240,180,60,0.15);color:var(--ui-accent);}
 .tla-hot{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin-top:8px;}
 .tla-hot-card h3{margin-bottom:2px;}
-.tla-hot-ts{display:block;font-size:10px;color:var(--ui-text-quaternary,#777);margin-bottom:2px;}
-.tla-hot-chip{display:flex;flex-direction:row;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px solid var(--ui-stroke-secondary,#2a2a2a);}
-.tla-hot-chip .tla-hot-sym{font-size:13px;font-weight:700;color:var(--ui-text-primary,#eee);}
-.tla-hot-chip .tla-hot-kelly{font-size:11px;font-variant-numeric:tabular-nums;color:var(--ui-text-secondary,#aaa);margin-left:4px;}
+.tla-hot-ts{display:block;font-size:10px;color:var(--ui-text-quaternary);margin-bottom:2px;}
+.tla-hot-chip{display:flex;flex-direction:row;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px solid var(--ui-stroke-secondary);}
+.tla-hot-chip .tla-hot-sym{font-size:13px;font-weight:700;color:var(--ui-text-primary);}
+.tla-hot-chip .tla-hot-kelly{font-size:11px;font-variant-numeric:tabular-nums;color:var(--ui-text-secondary);margin-left:4px;}
 .tla-hot-chip .tla-hot-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}
-.tla-hot-chip .tla-hot-regime{font-size:10px;color:var(--ui-text-tertiary,#888);margin-left:2px;white-space:nowrap;}
+.tla-hot-chip .tla-hot-regime{font-size:10px;color:var(--ui-text-tertiary);margin-left:2px;white-space:nowrap;}
 .tla-hot-buy{background:rgba(76,154,255,0.10);border-color:rgba(76,154,255,0.35);}
-.tla-hot-buy .tla-hot-dir{color:#fff;background:#2f6fd6;}
+.tla-hot-buy .tla-hot-dir{color:var(--ui-text-on-accent);background:var(--ui-accent);}
 .tla-hot-sell{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);}
-.tla-hot-sell .tla-hot-dir{color:#fff;background:#d64545;}
-.tla-err{color:var(--ui-danger,#ff5c5c);font-size:12px;padding:8px;}
-.tla-ok{color:#78dc78;font-size:12px;}
-.tla-hint{color:var(--ui-text-quaternary,#666);font-size:11px;}
-.tla-explainer{color:var(--ui-text-secondary,#bbb);font-size:11px;line-height:1.55;background:rgba(127,127,127,0.07);border-left:3px solid var(--ui-accent,#4c9aff);padding:7px 10px;margin:8px 0 10px;border-radius:0 6px 6px 0;}
+.tla-hot-sell .tla-hot-dir{color:var(--ui-text-on-accent);background:var(--ui-danger);}
+.tla-err{color:var(--ui-danger);font-size:12px;padding:8px;}
+.tla-ok{color:var(--ui-success);font-size:12px;}
+.tla-hint{color:var(--ui-text-quaternary);font-size:11px;}
+.tla-explainer{color:var(--ui-text-secondary);font-size:11px;line-height:1.55;background:rgba(127,127,127,0.07);border-left:3px solid var(--ui-accent);padding:7px 10px;margin:8px 0 10px;border-radius:0 6px 6px 0;}
 .tla-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}
-.tla-field label{font-size:11px;color:var(--ui-text-tertiary,#888);}
-.tla-field input{background:var(--ui-panel,#101010);border:1px solid var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-primary,#eee);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit;}
-.tla-btn-secondary:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);opacity:1;}
-.tla-banner{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;background:rgba(240,180,60,0.10);border:1px solid rgba(240,180,60,0.35);color:#f0b43c;}
-.tla-banner-paywall{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);color:var(--ui-danger,#ff5c5c);}
+.tla-field label{font-size:11px;color:var(--ui-text-tertiary);}
+.tla-field input{background:var(--ui-panel);border:1px solid var(--ui-stroke-secondary);color:var(--ui-text-primary);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit;}
+.tla-btn-secondary:hover{border-color:var(--ui-accent);color:var(--ui-accent);opacity:1;}
+.tla-banner{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;background:rgba(240,180,60,0.10);border:1px solid rgba(240,180,60,0.35);color:var(--ui-accent);}
+.tla-banner-paywall{background:rgba(255,92,92,0.10);border-color:rgba(255,92,92,0.35);color:var(--ui-danger);}
 .tla-center{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px;padding:24px;text-align:center;}
-.tla-title{font-size:18px;font-weight:700;color:var(--ui-text-primary,#eee);}
+.tla-title{font-size:18px;font-weight:700;color:var(--ui-text-primary);}
 .tla-brick-picker{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 10px;}
-.tla-brick-btn{background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;color:var(--ui-text-secondary,#aaa);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;letter-spacing:0.03em;}
-.tla-brick-btn:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}
-.tla-brick-btn-active{background:rgba(76,154,255,0.18);border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}
+.tla-brick-btn{background:transparent;border:1px solid var(--ui-stroke-secondary);border-radius:8px;color:var(--ui-text-secondary);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;letter-spacing:0.03em;}
+.tla-brick-btn:hover{border-color:var(--ui-accent);color:var(--ui-accent);}
+.tla-brick-btn-active{background:rgba(76,154,255,0.18);border-color:var(--ui-accent);color:var(--ui-accent);}
 .tla-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;}
 .tla-inline{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;}
-.tla-badge.overconfident{background:rgba(255,92,92,0.15);color:var(--ui-danger,#ff5c5c);}
-.tla-badge.underconfident{background:rgba(120,220,120,0.15);color:#78dc78;}
-.tla-badge.calibrated{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary,#888);}
-.tla-badge.sig{background:rgba(120,220,120,0.15);color:#78dc78;}
-.tla-chip{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 8px;font-size:11px;font-weight:500;color:var(--ui-text-tertiary,#888);background:transparent;border:none;cursor:pointer;font-family:inherit;letter-spacing:0.02em;}
-.tla-chip:hover{color:var(--ui-text-primary,#eee);background:rgba(127,127,127,0.08);}
-.tla-chip .tla-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-text-quaternary,#777);flex-shrink:0;}
-.tla-chip.tla-chip-hot{color:var(--ui-accent,#4c9aff);font-weight:700;}
-.tla-chip.tla-chip-hot .tla-chip-dot{background:var(--ui-accent,#4c9aff);}
+.tla-badge.overconfident{background:rgba(255,92,92,0.15);color:var(--ui-danger);}
+.tla-badge.underconfident{background:rgba(120,220,120,0.15);color:var(--ui-success);}
+.tla-badge.calibrated{background:rgba(153,153,153,0.15);color:var(--ui-text-tertiary);}
+.tla-badge.sig{background:rgba(120,220,120,0.15);color:var(--ui-success);}
+.tla-chip{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 8px;font-size:11px;font-weight:500;color:var(--ui-text-tertiary);background:transparent;border:none;cursor:pointer;font-family:inherit;letter-spacing:0.02em;}
+.tla-chip:hover{color:var(--ui-text-primary);background:rgba(127,127,127,0.08);}
+.tla-chip .tla-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-text-quaternary);flex-shrink:0;}
+.tla-chip.tla-chip-hot{color:var(--ui-accent);font-weight:700;}
+.tla-chip.tla-chip-hot .tla-chip-dot{background:var(--ui-accent);}
 .tla-pane-root{display:flex;flex-direction:column;height:100%;width:100%;min-width:0;box-sizing:border-box;gap:8px;padding:10px;overflow:auto;font-size:12px;container-type:inline-size;}
-.tla-pane-header{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ui-text-primary,#eee);padding-bottom:6px;border-bottom:1px solid var(--ui-stroke-secondary,#2a2a2a);}
-.tla-pane-badge{background:var(--ui-accent,#4c9aff);color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;}
-.tla-pane-open{margin-left:auto;background:transparent;border:1px solid var(--ui-stroke-secondary,#2a2a2a);color:var(--ui-text-secondary,#aaa);border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;}
-.tla-pane-open:hover{border-color:var(--ui-accent,#4c9aff);color:var(--ui-accent,#4c9aff);}
-.tla-pane-last{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--ui-stroke-secondary,#2a2a2a);border-radius:8px;}
-.tla-pane-sym{font-size:14px;font-weight:700;color:var(--ui-text-primary,#eee);}
+.tla-pane-header{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ui-text-primary);padding-bottom:6px;border-bottom:1px solid var(--ui-stroke-secondary);}
+.tla-pane-badge{background:var(--ui-accent);color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;}
+.tla-pane-open{margin-left:auto;background:transparent;border:1px solid var(--ui-stroke-secondary);color:var(--ui-text-secondary);border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;}
+.tla-pane-open:hover{border-color:var(--ui-accent);color:var(--ui-accent);}
+.tla-pane-last{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;}
+.tla-pane-sym{font-size:14px;font-weight:700;color:var(--ui-text-primary);}
 .tla-pane-dir{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 5px;border-radius:4px;}
-.tla-pane-buy{color:#fff;background:#2f6fd6;}
-.tla-pane-sell{color:#fff;background:#d64545;}
-.tla-pane-kelly{font-size:11px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;}
-.tla-pane-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}
-.tla-pane-ts{font-size:10px;color:var(--ui-text-quaternary,#777);width:100%;}
-.tla-pane-price{display:flex;flex-wrap:wrap;gap:8px;width:100%;margin-top:4px;font-size:10px;font-variant-numeric:tabular-nums;padding-top:4px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}
-.tla-pane-price-entry{color:var(--ui-text-primary,#eee);}
-.tla-pane-price-sl{color:var(--ui-danger,#ff5c5c);}
-.tla-pane-price-tp{color:var(--ui-accent,#4c9aff);}
+.tla-pane-buy{color:#fff;background:var(--ui-accent);}
+.tla-pane-sell{color:#fff;background:var(--ui-danger);}
+.tla-pane-kelly{font-size:11px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;}
+.tla-pane-regime{font-size:10px;color:var(--ui-text-tertiary);}
+.tla-pane-ts{font-size:10px;color:var(--ui-text-quaternary);width:100%;}
+.tla-pane-price{display:flex;flex-wrap:wrap;gap:8px;width:100%;margin-top:4px;font-size:10px;font-variant-numeric:tabular-nums;padding-top:4px;border-top:1px solid var(--ui-stroke-secondary);}
+.tla-pane-price-entry{color:var(--ui-text-primary);}
+.tla-pane-price-sl{color:var(--ui-danger);}
+.tla-pane-price-tp{color:var(--ui-accent);}
 .tla-pane-hint{padding:4px 0;}
 .tla-pane-list{display:flex;flex-direction:column;gap:4px;}
-.tla-pane-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;background:transparent;border:1px solid transparent;border-radius:6px;padding:5px 6px;color:var(--ui-text-primary,#eee);cursor:pointer;font-family:inherit;text-align:left;}
-.tla-pane-row:hover{background:rgba(127,127,127,0.08);border-color:var(--ui-stroke-secondary,#2a2a2a);}
+.tla-pane-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;background:transparent;border:1px solid transparent;border-radius:6px;padding:5px 6px;color:var(--ui-text-primary);cursor:pointer;font-family:inherit;text-align:left;}
+.tla-pane-row:hover{background:rgba(127,127,127,0.08);border-color:var(--ui-stroke-secondary);}
 .tla-pane-price-row{flex-basis:100%;margin-top:2px;padding-top:2px;}
 .tla-pane-row-sym{font-size:12px;font-weight:700;}
-.tla-pane-row-kelly{font-size:10px;color:var(--ui-text-secondary,#aaa);font-variant-numeric:tabular-nums;margin-left:auto;}
-.tla-pane-row-regime{font-size:10px;color:var(--ui-text-tertiary,#888);}
-.tla-pane-row-ts{font-size:10px;color:var(--ui-text-quaternary,#777);}
-.tla-pane-foot{font-size:9px;color:var(--ui-text-quaternary,#666);margin-top:auto;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary,#2a2a2a);}
+.tla-pane-row-kelly{font-size:10px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;margin-left:auto;}
+.tla-pane-row-regime{font-size:10px;color:var(--ui-text-tertiary);}
+.tla-pane-row-ts{font-size:10px;color:var(--ui-text-quaternary);}
+.tla-pane-foot{font-size:9px;color:var(--ui-text-quaternary);margin-top:auto;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary);}
 @container (min-width: 560px){
 .tla-pane-root .tla-pane-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
 .tla-pane-root .tla-pane-last{flex-wrap:nowrap;}
@@ -1825,7 +1982,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
   const idxLabels = []
   for (let i = 0; i < bricks.length; i += idxStep) idxLabels.push(i)
   if (idxLabels[idxLabels.length - 1] !== bricks.length - 1) idxLabels.push(bricks.length - 1)
-  const gridLines = brickGridLines(pMin, pMax, Math.max(4, Math.floor(height / 55)))
+  const gridLines = brickGridLines(pMin, pMax, pRange / 4)
 
   const rects = bricks.map((b, i) => {
     const lo = Math.min(b.open_price, b.close_price)
@@ -1849,9 +2006,9 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
         width: BRICK_W,
         height: h,
         rx: 1.5,
-        fill: up ? 'var(--ui-accent,#4c9aff)' : 'var(--ui-danger,#ff5c5c)',
+        fill: up ? '#26a69a' : '#ef5350',
         fillOpacity: 0.85,
-        stroke: up ? 'var(--ui-success,#26d374)' : 'var(--ui-danger,#ff5c5c)',
+        stroke: up ? '#26a69a' : '#ef5350',
         strokeWidth: 0.5,
       }),
     )
@@ -1863,11 +2020,11 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
       React.createElement('line', {
         x1: BRICK_LEFT_PAD, x2: BRICK_LEFT_PAD + bricks.length * BRICK_STEP,
         y1: y, y2: y,
-        stroke: 'var(--ui-text-tertiary)', strokeOpacity: 0.15, strokeDasharray: '3 3',
+        stroke: 'var(--ui-text-tertiary,#888)', strokeOpacity: 0.25, strokeDasharray: '3 3',
       }),
       React.createElement('text', {
         x: BRICK_LEFT_PAD + bricks.length * BRICK_STEP + 5, y: y + 3,
-        fill: 'var(--ui-text-tertiary)', fontSize: 9, fontFamily: 'monospace',
+        fill: 'var(--ui-text-secondary,#aaa)', fontSize: 11, fontFamily: 'monospace',
       }, fmtBrickPrice(p)),
     )
   })
@@ -1877,7 +2034,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
       key: 'i' + i,
       x: BRICK_LEFT_PAD + i * BRICK_STEP + BRICK_W / 2,
       y: height - 6,
-      fill: 'var(--ui-text-tertiary)', fontSize: 8, fontFamily: 'monospace', textAnchor: 'middle',
+      fill: 'var(--ui-text-tertiary,#888)', fontSize: 10, fontFamily: 'monospace', textAnchor: 'middle',
     }, String(i)),
   )
 
@@ -1888,7 +2045,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
       key: 'pricetitle',
       x: BRICK_LEFT_PAD + bricks.length * BRICK_STEP + 42,
       y: BRICK_TOP_PAD + chartH / 2,
-      fill: 'var(--ui-text-tertiary)', fontSize: 9, fontFamily: 'sans-serif',
+      fill: 'var(--ui-text-tertiary,#888)', fontSize: 10, fontFamily: 'sans-serif',
       textAnchor: 'middle',
       transform: `rotate(-90, ${BRICK_LEFT_PAD + bricks.length * BRICK_STEP + 42}, ${BRICK_TOP_PAD + chartH / 2})`,
     }, 'Price'),
@@ -1896,7 +2053,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
       key: 'idxtitle',
       x: BRICK_LEFT_PAD + chartEndX / 2 - BRICK_LEFT_PAD / 2,
       y: height - 1,
-      fill: 'var(--ui-text-tertiary)', fontSize: 9, fontFamily: 'sans-serif', textAnchor: 'middle',
+      fill: 'var(--ui-text-tertiary,#888)', fontSize: 10, fontFamily: 'sans-serif', textAnchor: 'middle',
     }, 'Brick index'),
   ]
 
@@ -1933,8 +2090,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
     React.createElement('svg', {
       viewBox: `0 0 ${svgW} ${height}`,
       width: '100%',
-      height: 'auto',
-      style: { display: 'block', maxHeight: 420 },
+      style: { display: 'block', maxHeight: 420, height: 'auto' },
     },
       gridEls,
       levelEls,
@@ -1949,7 +2105,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
         )
       : null,
     React.createElement('div', { className: 'tla-hint', style: { marginTop: 4 } },
-      `${bricks.length} bricks (last ${bricks.length} of series) · up = buy (blue) · down = sell (red) · last brick index ${bricks[bricks.length - 1].brick_index != null ? bricks[bricks.length - 1].brick_index : bricks.length - 1}`),
+      `${bricks.length} bricks (last ${bricks.length} of series) · up = buy (green #26a69a) · down = sell (red #ef5350) · last brick index ${bricks[bricks.length - 1].brick_index != null ? bricks[bricks.length - 1].brick_index : bricks.length - 1}`),
   )
 }
 
@@ -2378,9 +2534,9 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
     if (sweepRow.entry_price != null && Number(sweepRow.entry_price) > 0)
       levels.push({ label: 'ENTRY', price: Number(sweepRow.entry_price), color: 'var(--ui-text-primary)' })
     if (sweepRow.stop_loss != null && Number(sweepRow.stop_loss) > 0)
-      levels.push({ label: 'SL', price: Number(sweepRow.stop_loss), color: 'var(--ui-danger,#ff5c5c)' })
+      levels.push({ label: 'SL', price: Number(sweepRow.stop_loss), color: 'var(--ui-danger)' })
     if (sweepRow.take_profit != null && Number(sweepRow.take_profit) > 0)
-      levels.push({ label: 'TP', price: Number(sweepRow.take_profit), color: 'var(--ui-accent,#4c9aff)' })
+      levels.push({ label: 'TP', price: Number(sweepRow.take_profit), color: 'var(--ui-accent)' })
     }
 
     // --- Phase 2 derived analytics -------------------------------------------
@@ -2501,7 +2657,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
         React.createElement('div', { className: 'tla-grid' },
           React.createElement(StatCard, {
             title: 'Brick pattern',
-            value: pattern || '—',
+            value: patternLabel(pattern),
             sub: `last ${brickWindow.length} bricks · ${(sweepRow && sweepRow.regime) || 'regime n/a'}`,
           }),
           React.createElement(StatCard, {
@@ -2608,11 +2764,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                       ? wilsonLower(Number(r.n_resolved), Number(r.n_tp))
                       : null
                     return React.createElement('tr', { key: r.symbol + i },
-                      React.createElement('td', null,
-                        r.symbol,
-                        fdr && fdr.significant
-                          ? React.createElement('span', { className: cn('tla-badge', 'tla-hot-chip'), title: 'survives BH-FDR at 0.05' }, 'sig')
-                          : null),
+                      React.createElement('td', null, r.symbol),
                       React.createElement('td', null, r.n_resolved != null ? String(r.n_resolved) : '—'),
                       React.createElement('td', null, r.win_rate != null ? (Number(r.win_rate) * 100).toFixed(1) + '%' : '—'),
                       React.createElement('td', { className: 'tla-sm' }, lb != null ? (lb * 100).toFixed(1) + '%' : '—'),

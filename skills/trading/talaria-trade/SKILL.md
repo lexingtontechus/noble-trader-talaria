@@ -1,16 +1,17 @@
 ---
 name: talaria-trade
-description: Execute Talaria BUY/SELL signals as 0.01-lot MT5 web-trader orders
-tags: [talaria, trading, mt5, execution, order-panel]
+description: Execute Talaria BUY/SELL signals as 0.01-lot MT5 Plexy Trade web-trader orders
+tags: [talaria, trading, mt5, plexy trade, execution, order-panel]
 category: trading
 related_skills: [talaria-client]
+thinking: off
 version: 0.2.0
 ---
 
-# Skill: talaria-trade — Execute Talaria Signals in MT5
+# Skill: talaria-trade — Execute Talaria Signals in Plexy Trade MT5
 
 ## Purpose
-You are a Hermes agent executing live trades from Talaria BUY/SELL signals into the MT5 web trader, using the in-app browser only. No external browser, no Supabase calls, no thinking.
+You are a Hermes agent executing live trades from Talaria BUY/SELL signals into the Plexy Trade MT5 web trader, using the in-app browser only. No external browser, no database calls, no thinking.
 
 Three execution modes:
 
@@ -22,15 +23,16 @@ Three execution modes:
 
 ## Execution Discipline (User-Enforced)
 
-- **Never spin.** If the order panel is already open (visible in read_preview text output), DO NOT re-run F9. Check current state before acting.
-- **Trust visual state.** User says "it's already open" — verify via read_preview (look for volume input, buy button text), not by re-issuing F9.
+- Check current state before acting.
+- **Order Panel** F9 opens order panel. 
+- Use sub-agents to get Talaria signals and for pricing analysis.
 
 ## Prerequisites
-- MT5 web trader loaded in Hermes in-app browser preview pane at https://mt5webtrader.plexytrade.com/terminal
-- Logged into account 3112146 (or current demo account)
-- Talaria dashboard visible in Hermes middle pane showing BUY/SELL signals
-- F9 opens the Trade Form order panel (NOT one-click trading)
-
+- Plexy Trade MT5 web trader loaded in Hermes in-app browser preview pane at https://mt5webtrader.plexytrade.com/terminal
+- Logged into account (or current demo account)
+- Talaria dashboard visible in Hermes bottom pane showing BUY/SELL signals
+- F9 opens the Trade Form order panel
+- 
 ## Config
 ```yaml
 talaria:
@@ -41,7 +43,7 @@ talaria:
 ## Execution Workflow
 
 ### Step 1 — Signal to Symbol
-1. Read Talaria dashboard (Hermes middle pane) for latest BUY/SELL signal
+1. Read Talaria dashboard (Hermes bottom pane) for latest BUY/SELL signal
 2. Select ONE symbol (e.g., XAUUSD)
 3. In in-app browser, search for symbol and click to load chart
 4. Verify via read_preview that symbol loaded (title shows [SYMBOL, H1])

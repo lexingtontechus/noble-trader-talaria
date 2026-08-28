@@ -47,19 +47,19 @@
 .tla-table th { color: var(--ui-text-tertiary); font-weight: 600; }
 .tla-table .tla-sm { font-size: 9px; color: var(--ui-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tla-table tbody tr:hover { background: rgba(0,0,0,0.03); }
-.tla-kelly-table .tla-regime-cell { font-size: 14px; font-weight: 600; }
-.tla-kelly-table .tla-agg-cell { font-size: 13px; font-weight: 600; }
-.tla-kelly-table .tla-sig-cell { font-size: 13px; font-weight: 700; text-transform: uppercase; }
-.tla-kelly-table .tla-kelly-cell { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-kelly-fCell { font-size: 9px; color: var(--ui-text-secondary); font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-pwin-cell { font-size: 11px; font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-ev-cell { font-size: 11px; font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-regime-cell { font-size: 12px; font-weight: 600; }
+.tla-kelly-table .tla-agg-cell { font-size: 12px; font-weight: 600; }
+.tla-kelly-table .tla-sig-cell { font-size: 12px; font-weight: 700; text-transform: uppercase; }
+.tla-kelly-table .tla-kelly-cell { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-kelly-fCell { font-size: 10px; color: var(--ui-text-secondary); font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-pwin-cell { font-size: 10px; font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-ev-cell { font-size: 10px; font-variant-numeric: tabular-nums; }
 .tla-kelly-table .tla-price-cell { font-size: 10px; font-variant-numeric: tabular-nums; }
 .tla-kelly-table .tla-conf-cell { font-size: 10px; color: var(--ui-text-tertiary); font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-ts-cell { font-size: 9px; color: var(--ui-text-tertiary); font-variant-numeric: tabular-nums; }
-.tla-kelly-table .tla-shift-cell { font-size: 12px; text-align: center; }
-.tla-kelly-table .tla-prev-cell { font-size: 11px; color: var(--ui-text-secondary); }
-.tla-kelly-table .tla-sizemult-cell { font-size: 9px; color: var(--ui-text-secondary); }
+.tla-kelly-table .tla-ts-cell { font-size: 10px; color: var(--ui-text-tertiary); font-variant-numeric: tabular-nums; }
+.tla-kelly-table .tla-shift-cell { font-size: 10px; text-align: center; }
+.tla-kelly-table .tla-prev-cell { font-size: 10px; color: var(--ui-text-secondary); }
+.tla-kelly-table .tla-sizemult-cell { font-size: 10px; color: var(--ui-text-secondary); }
 .tla-kelly-table .tla-group-header td { font-size: 11px; font-weight: 600; color: var(--ui-text-tertiary); border-bottom: 1px solid var(--ui-stroke-secondary); }
 .tla-kelly-table-wrap { overflow-x: auto; }
 .tla-context-card .tla-context-value { font-size: 20px; font-weight: 700; }

@@ -967,7 +967,7 @@ const POSTHOG_API_HOST = 'https://us.i.posthog.com'
 //        re-renders even on re-seen (ts <= watermark) rows.
 // 0.2.13: (user correction 2026-08-19) fixed wrong workspace path in docs
 // 0.2.14: Phase 2 — in-plugin version check banner (upgrade notice via GitHub Releases API)
-const PLUGIN_VERSION = '0.2.18'
+const PLUGIN_VERSION = '0.2.19'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
@@ -1841,19 +1841,19 @@ const CSS = `
 .tla-pos{color:var(--ui-accent);}
 .tla-neg{color:var(--ui-danger);}
 .tla-table .tla-sm{font-size:9px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;}
-.tla-kelly-table .tla-regime-cell{font-size:14px;font-weight:600;}
-.tla-kelly-table .tla-agg-cell{font-size:13px;font-weight:600;}
-.tla-kelly-table .tla-sig-cell{font-size:13px;font-weight:700;text-transform:uppercase;}
-.tla-kelly-table .tla-kelly-cell{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-kelly-fCell{font-size:9px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-pwin-cell{font-size:11px;font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-ev-cell{font-size:11px;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-regime-cell{font-size:12px;font-weight:600;}
+.tla-kelly-table .tla-agg-cell{font-size:12px;font-weight:600;}
+.tla-kelly-table .tla-sig-cell{font-size:12px;font-weight:700;text-transform:uppercase;}
+.tla-kelly-table .tla-kelly-cell{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-kelly-fCell{font-size:10px;color:var(--ui-text-secondary);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-pwin-cell{font-size:10px;font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-ev-cell{font-size:10px;font-variant-numeric:tabular-nums;}
 .tla-kelly-table .tla-price-cell{font-size:10px;font-variant-numeric:tabular-nums;}
 .tla-kelly-table .tla-conf-cell{font-size:10px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-ts-cell{font-size:9px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}
-.tla-kelly-table .tla-shift-cell{font-size:12px;text-align:center;}
-.tla-kelly-table .tla-prev-cell{font-size:11px;color:var(--ui-text-secondary);}
-.tla-kelly-table .tla-sizemult-cell{font-size:9px;color:var(--ui-text-secondary);}
+.tla-kelly-table .tla-ts-cell{font-size:10px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;}
+.tla-kelly-table .tla-shift-cell{font-size:10px;text-align:center;}
+.tla-kelly-table .tla-prev-cell{font-size:10px;color:var(--ui-text-secondary);}
+.tla-kelly-table .tla-sizemult-cell{font-size:10px;color:var(--ui-text-secondary);}
 .tla-kelly-table .tla-group-header td{font-size:11px;font-weight:600;color:var(--ui-text-tertiary);border-bottom:1px solid var(--ui-stroke-secondary);}
 .tla-kelly-table-wrap{overflow-x:auto;}
 .tla-context-card .tla-context-value{font-size:20px;font-weight:700;}
@@ -2764,11 +2764,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
                       ? wilsonLower(Number(r.n_resolved), Number(r.n_tp))
                       : null
                     return React.createElement('tr', { key: r.symbol + i },
-                      React.createElement('td', null,
-                        r.symbol,
-                        fdr && fdr.significant
-                          ? React.createElement('span', { className: cn('tla-badge', 'tla-hot-chip'), title: 'survives BH-FDR at 0.05' }, 'sig')
-                          : null),
+                      React.createElement('td', null, r.symbol),
                       React.createElement('td', null, r.n_resolved != null ? String(r.n_resolved) : '—'),
                       React.createElement('td', null, r.win_rate != null ? (Number(r.win_rate) * 100).toFixed(1) + '%' : '—'),
                       React.createElement('td', { className: 'tla-sm' }, lb != null ? (lb * 100).toFixed(1) + '%' : '—'),
