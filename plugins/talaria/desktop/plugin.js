@@ -346,22 +346,39 @@ function useConfig(defaults) {
 
 // NOTE (2026-08-24 verification pass): both functions below were missing the
 // PostgREST '/rest/v1/' path prefix entirely — fetchSupabase built URLs like
-// 'https://<project>.supabase.co' + 'nt_sweep_result' (no separator at all,
-// concatenating straight into '.cont_sweep_result'), so every useSupabaseData
+// 'https://<project>.supabase.co' + 'v_talaria_latest_signals' (no separator at all,
+// concatenating straight into '.co_v_talaria_latest_signals'), so every useSupabaseData
 // call in both plugins silently failed. Confirmed via the talaria render
-// harness ("Unexpected fetch URL: https://...supabase.cont_sweep_result").
+// harness ("Unexpected fetch URL: https://...supabase.co_v_talaria_latest_signals").
+// SECURITY: fetchSupabase now includes the claim token (x-claim-token header)
+// on every view-retrieval call. The anon key is PUBLIC (RLS read-only), but
+// the claim token gates paid views (v_paper_equity, v_talaria_portfolio_stats,
+// v_paper_vs_optimized_daily) via RLS policies that check the JWT claims.
+// Rate limiting is enforced server-side by the talaria-check Edge Function
+// proxy layer — each claim token is limited to 60 req/min.
 function fetchSupabase(config, path, params) {
   const base = config.supabase_url
   const qs = new URLSearchParams(params || {}).toString()
   const url = qs ? base + '/rest/v1/' + path + '?' + qs : base + '/rest/v1/' + path
-  return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key } })
+  const headers = { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key }
+  // Attach claim token for RLS-gated views. The anon key alone cannot read
+  // Pro-only views — the edge function validates the token and injects a
+  // scoped JWT before forwarding to PostgREST.
+  if (config.claim_token) {
+    headers['x-claim-token'] = config.claim_token
+  }
+  return fetch(url, { headers })
     .then((r) => r.json())
 }
 
 function fetchSupabaseCount(config, table, filter) {
   const qs = new URLSearchParams(Object.assign({ select: 'count' }, filter || {})).toString()
   const url = config.supabase_url + '/rest/v1/' + table + '?' + qs
-  return fetch(url, { headers: { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key, Prefer: 'count=exact' } })
+  const headers = { apikey: config.supabase_key, Authorization: 'Bearer ' + config.supabase_key, Prefer: 'count=exact' }
+  if (config.claim_token) {
+    headers['x-claim-token'] = config.claim_token
+  }
+  return fetch(url, { headers })
     .then((r) => Number(r.headers.get('content-range')?.split('/')?.[1] || r.headers.get('x-total-count') || 0))
 }
 
@@ -637,7 +654,7 @@ function ConnectTab({ config, onSave, checkPhase, checkMsg, variant }) {
 
   // admin (default) \u2014 restored 2026-08-24 from noble-trader-admin-plugin-v0.2.10.zip (a
   // pre-Batch-A backup): heading, labeled fields, and the "Test connection" button (pings
-  // nt_signal_sim directly) were replaced during the 2026-08-24 consolidation with a
+  // v_signal_sim directly) were replaced during the 2026-08-24 consolidation with a
   // placeholder-only, unlabeled, tla-*-classed form that (a) never said "Connect" anywhere,
   // which is what a stale render-harness assertion (findH3(out, 'Connect')) was actually
   // catching, and (b) used talaria's CSS prefix instead of admin's own nta-*/dui-* classes.
@@ -650,8 +667,12 @@ function ConnectTab({ config, onSave, checkPhase, checkMsg, variant }) {
     setTestResult(null)
     try {
       const base = (local.supabase_url || '').replace(/\/+$/, '')
-      const resp = await fetch(`${base}/rest/v1/nt_signal_sim?select=signal_id&limit=1`, {
-        headers: { apikey: local.supabase_key, Authorization: `Bearer ${local.supabase_key}`, Accept: 'application/json' },
+      const headers = { apikey: local.supabase_key, Authorization: `Bearer ${local.supabase_key}`, Accept: 'application/json' }
+      // SECURITY: attach claim token if provided — the v_signal_sim view is
+      // RLS-gated; the anon key alone returns PGRST205 without a valid token.
+      if (local.claim_token) headers['x-claim-token'] = local.claim_token
+      const resp = await fetch(`${base}/rest/v1/v_signal_sim?select=signal_id&limit=1`, {
+        headers,
       })
       if (!resp.ok) setTestResult({ ok: false, msg: `${resp.status} ${resp.statusText}` })
       else setTestResult({ ok: true, msg: 'Connected \u2014 Supabase reachable' })
@@ -854,10 +875,10 @@ function ensureStyle(styleId, customCss) {
 
 // NOTE (2026-08-24 verification pass): both functions below were missing the
 // PostgREST '/rest/v1/' path prefix entirely — fetchSupabase built URLs like
-// 'https://<project>.supabase.co' + 'nt_sweep_result' (no separator at all,
-// concatenating straight into '.cont_sweep_result'), so every useSupabaseData
+// 'https://<project>.supabase.co' + 'v_talaria_latest_signals' (no separator at all,
+// concatenating straight into '.co_v_talaria_latest_signals'), so every useSupabaseData
 // call in both plugins silently failed. Confirmed via the talaria render
-// harness ("Unexpected fetch URL: https://...supabase.cont_sweep_result").
+// harness ("Unexpected fetch URL: https://...supabase.co_v_talaria_latest_signals").
 
 
 // ConnectTab \u2014 shared between admin and talaria, which need genuinely different
@@ -919,11 +940,11 @@ function ensureStyle(styleId, customCss) {
  *     {token} → {ok, plan_slug, plan_uuid, sub_status, period_end, grace_end,
  *     next_charge_url}. The plan_uuid from the SERVER response drives the
  *     symbol list + channel selection — never client-derived.
- *   - Symbol list: GET /rest/v1/nt_symbol?select=symbol&plan_ids=cs.{plan_uuid}
+ *   - Symbol list: GET /rest/v1/v_talaria_symbols?select=symbol&plan_ids=cs.{plan_uuid}
  *     (PostgREST `cs.` contains-filter on the UUID[] column — the array-literal
  *     braces form is required; bare `cs.<uuid>` fails 22P02 on Postgres).
- *   - Data poll: GET /rest/v1/nt_sweep_result + nt_renko_bricks +
- *     nt_paper_positions + v_paper_equity via the PUBLIC anon key
+ *   - Data poll: GET /rest/v1/v_talaria_latest_signals + v_talaria_renko +
+ *     v_paper_positions + v_paper_equity via the PUBLIC anon key
  *     (read-only RLS, migration 107).
  *   - Live push: native WebSocket to the Supabase Realtime endpoint
  *     (Phoenix protocol) — joins the plan-scoped signal topic
@@ -1233,7 +1254,7 @@ const PANE_TICK_MS = 30 * 1000
 
 // ONE shared poller for the widget surfaces (chip + pane). The dashboard has
 // its own realtime socket; the widget surfaces are always mounted even when
-// the dashboard is not, so they share a single 60s nt_sweep_result poll that
+// the dashboard is not, so they share a single 60s v_talaria_latest_signals poll that
 // feeds signalStore. Guarded so mount/unmount of either surface never
 // double-polls. Returns a cleanup (clears the interval) so the harness's
 // sync useEffect cleanup can dispose it — keeps the node process exit-able.
@@ -1257,12 +1278,12 @@ function startSignalPolling() {
       // Prefer: count=exact (X-Total-Count header) is the authoritative number.
       const cutoff60m = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 19)
       const [rows, count] = await Promise.all([
-        fetchSupabase(cfg, 'nt_sweep_result', {
+        fetchSupabase(cfg, 'v_talaria_latest_signals', {
           select: 'symbol,signal,effective_kelly,kelly_f,entry_price,stop_loss,take_profit,sweep_timestamp,qualified,regime',
           qualified: 'eq.true',
           order: 'sweep_timestamp.desc', limit: '20',
         }),
-        fetchSupabaseCount(cfg, 'nt_sweep_result', {
+        fetchSupabaseCount(cfg, 'v_talaria_latest_signals', {
           qualified: 'eq.true',
           sweep_timestamp: `gte.${cutoff60m}`,
           select: 'id',
@@ -1338,7 +1359,7 @@ function fmtToastFooter(tsMs, extra) {
 
 
 // Kelly by symbol — latest sweep TABLE component (2026-08-12 redesign).
-// Groups nt_sweep_result rows by asset_class, deduped to latest per symbol,
+// Groups v_talaria_latest_signals rows by asset_class, deduped to latest per symbol,
 // sorted by symbol ASC within each class. Excludes brick_* columns.
 const CLASS_ORDER_TALARIA = { crypto: 0, forex: 1, commodities: 2, stocks: 3, other: 4 }
 const CLASS_LABEL_TALARIA = {
@@ -1487,9 +1508,9 @@ const TalariaMark = ({ className = 'tla-mark', size = 24, color = '#B8823D' }) =
 const TV_LWCHARTS_CDN = 'https://unpkg.com/lightweight-charts@4.3.0/dist/lightweight-charts.standalone.production.js'
 const TV_TIMEFRAME_NUM = '5'  // 5-minute charts via TradingView widget
 
-// Static fallback map for TradingView symbol format (used when the nt_symbol
+// Static fallback map for TradingView symbol format (used when the v_talaria_symbols
 // table hasn't provided a tradingview_symbol value for a symbol).
-// The dynamic map (tvSymbolBySym) is built from nt_symbol.tradingview_symbol
+// The dynamic map (tvSymbolBySym) is built from v_talaria_symbols.tradingview_symbol
 // fetched via useSupabaseData at runtime — that is the source of truth.
 const TV_SYMBOL_MAP = {
   BTCUSD: 'COINBASE:BTCUSD',
@@ -2116,7 +2137,7 @@ function RenkoBrickChart({ bricks, height = 300, levels }) {
 
 
 // ---------------------------------------------------------------------------
-// Hot signals banner — live 'signal' broadcasts + seed from nt_sweep_result
+// Hot signals banner — live 'signal' broadcasts + seed from v_talaria_latest_signals
 // (qualified, non-neutral, kelly present). 10-min TTL vs the newest signal,
 // sorted by kelly desc, ~5 shown. Hidden entirely when empty (returns null).
 // ---------------------------------------------------------------------------
@@ -2132,7 +2153,7 @@ const PAGE_SIZE = 8
 // ---------------------------------------------------------------------------
 // Paper section — Precision Pro only. Live 'paper' broadcast events
 // (opened/closed/equity) appended to a list (cap 50) + seed from
-// nt_paper_positions + latest v_paper_equity row. Renders an empty state
+// v_paper_positions + latest v_paper_equity row. Renders an empty state
 // gracefully when the tables don't exist yet (PGRST205 / 404).
 // ---------------------------------------------------------------------------
 function PaperSection({ positions, equity, events }) {
@@ -2167,7 +2188,7 @@ function PaperSection({ positions, equity, events }) {
       'Paper equity = cumulative realized PnL of the SIMULATED portfolio (no real money). Each day adds the closed-trade PnL for that day.'),
     missingTable && rows.length === 0
       ? React.createElement('div', { className: 'tla-hint' },
-          'Paper portfolio data not available yet — the nt_paper_positions table or v_paper_equity view is not deployed (PGRST205). Live paper events will still appear here once the backend publishes them.')
+          'Paper portfolio data not available yet — the v_paper_positions view or v_paper_equity view is not deployed (PGRST205). Live paper events will still appear here once the backend publishes them.')
       : null,
     React.createElement('table', { className: cn('tla-table') },
       React.createElement('thead', null,
@@ -2399,19 +2420,19 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
     },
     onPaper: (p) => setPaperEvents((prev) => [p, ...prev].slice(0, 50)),
   })
-  // Symbol list — plan-gated via nt_symbol.plan_ids cs. filter (UUID from the
+  // Symbol list — plan-gated via v_talaria_symbols.plan_ids cs. filter (UUID from the
   // server claim response, never client-derived). Intersected with the latest
   // sweep rows so ONLY ACTIVE symbols (those with a recent sweep) show in the
   // picker; falls back to the full plan list while sweeps are still loading.
   // Ordering is STABLE: grouped by asset_class (commodities → forex → crypto
   // → stocks) then symbol ASC — the raw sweep order changes every refresh.
   const hasPlanUuid = !!claim.plan_uuid
-  const symbols = useSupabaseData(config, 'nt_symbol',
+  const symbols = useSupabaseData(config, 'v_talaria_symbols',
     { select: 'symbol,asset_class,tradingview_symbol', plan_ids: hasPlanUuid ? 'cs.{' + claim.plan_uuid + '}' : undefined },
     connected && hasPlanUuid)
   const planSymbols = (symbols.data || []).map((r) => r.symbol).filter(Boolean)
   const assetClassOf = {}
-  const tvSymbolBySym = {}  // Internal symbol → TradingView symbol (from nt_symbol.tradingview_symbol)
+  const tvSymbolBySym = {}  // Internal symbol → TradingView symbol (from v_talaria_symbols.tradingview_symbol)
   for (const r of (symbols.data || [])) {
     assetClassOf[r.symbol] = r.asset_class || 'other'
     if (r.tradingview_symbol) tvSymbolBySym[r.symbol] = r.tradingview_symbol
@@ -2424,10 +2445,10 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
   }
 
   // Sweep data — powers the kelly histogram, the hot-signal seed and the
-  // renko ENTRY/SL/TP levels. NOTE: nt_sweep_result's direction column is
+  // renko ENTRY/SL/TP levels. NOTE: v_talaria_latest_signals's direction column is
   // `signal` (buy/sell/neutral) — the broadcast contract calls it `direction`,
   // so both are normalized client-side.
-  const sweeps = useSupabaseData(config, 'nt_sweep_result',
+  const sweeps = useSupabaseData(config, 'v_talaria_latest_signals',
     { select: 'symbol,sweep_timestamp,regime,regime_conf,markov_p_up,markov_p_dn,p_win,ev,p_timesfm,kelly_f,effective_kelly,brick_size,sl_bricks,tp_bricks,signal,entry_price,stop_loss,take_profit,qualified,aggression,regime_shift,prev_regime,size_mult', order: 'sweep_timestamp.desc', limit: '200' },
     connected)
 
@@ -2447,12 +2468,12 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
 
   // 10-brick renko window for the selected symbol (default = first symbol).
   const activeBrickSym = brickSym || (symbolList[0] || '')
-  const bricks = useSupabaseData(config, 'nt_renko_bricks',
+  const bricks = useSupabaseData(config, 'v_talaria_renko',
     { select: 'symbol,direction,brick_size,open_price,close_price,high,low,brick_index,ts', order: 'session_date.desc,brick_index.desc', limit: '10', symbol: 'eq.' + activeBrickSym },
     connected && !!activeBrickSym)
 
   // Paper portfolio (Precision Pro only) — REST seed + live events.
-  const paperPositions = useSupabaseData(config, 'nt_paper_positions',
+  const paperPositions = useSupabaseData(config, 'v_paper_positions',
     { select: 'symbol,direction,status,realized_pnl,r_multiple,open_ts', order: 'open_ts.desc', limit: '20' },
     connected && isPro)
   const paperEquity = useSupabaseData(config, 'v_paper_equity',
@@ -2479,7 +2500,7 @@ function TalariaDashboard({ config, claim, latestRelease, onDismissUpgrade }) {
     connected && isPro)
   // Long brick series (up to 200) for the Markov card — same symbol as the
   // 10-brick chart window, kept as a separate fetch.
-  const brickSeries = useSupabaseData(config, 'nt_renko_bricks',
+  const brickSeries = useSupabaseData(config, 'v_talaria_renko',
     { select: 'symbol,direction,open_price,close_price,high,low,brick_index,ts', order: 'session_date.desc,brick_index.desc', limit: '200', symbol: 'eq.' + activeBrickSym },
     connected && !!activeBrickSym)
 

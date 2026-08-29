@@ -3,7 +3,7 @@ name: talaria-trade
 description: Execute Talaria BUY/SELL signals as 0.01-lot MT5 Plexy Trade web-trader orders
 tags: [talaria, trading, mt5, plexy trade, execution, order-panel]
 category: trading
-related_skills: [talaria-client]
+related_skills: [talaria]
 thinking: off
 version: 0.2.0
 ---
@@ -94,7 +94,7 @@ read_preview count=5000 — look for:
 
 ## When NOT to use
 - User requests manual trade execution without explicit authorization
-- Supabase calls needed for signal data (use talaria-client skill instead)
+- Supabase calls needed for signal data (use talaria skill instead)
 - MT5 web trader not loaded in Hermes in-app browser
 - Existing position on same symbol (avoid doubling without user approval)
 - Market is highly volatile (spread widening) — check spread before executing

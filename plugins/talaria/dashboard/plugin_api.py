@@ -10,21 +10,21 @@ plugin) for live data. This backend layer provides:
   GET  /api/plugins/talaria/health          — liveness check
   GET  /api/plugins/talaria/config          — default Supabase URL/key + plan defaults
   POST /api/plugins/talaria/claim-check     — proxy for talaria-check Edge Function
-  GET  /api/plugins/talaria/symbols         — proxy: nt_symbol list for a plan
+  GET  /api/plugins/talaria/symbols         — proxy: v_talaria_symbols list for a plan
   GET  /api/plugins/talaria/sweeps/latest   — proxy: latest sweep results
-  GET  /api/plugins/talaria/signals/count   — proxy: count qualified signals in window
-  POST /api/plugins/talaria/signal-cache  — write latest signal to JSON file
-  GET  /api/plugins/talaria/signal-cache  — read latest signal from JSON file
 
 Security: plugin HTTP routes go through the dashboard's session-token
 auth middleware (web_server.auth_middleware) just like core API routes.
 The WebSocket /events endpoint (if needed) would use the same
-_ws_auth_ok gate as the kanban plugin.
+_ws_auth_ok gate as the kanban plugin. All proxy endpoints are rate-limited
+to protect public views from scraping — a reverse engineer who extracts the
+anon key + view names from the browser bundle cannot hammer them at scale.
 
 NOTE: The frontend currently calls Supabase REST directly (CORS-enabled
-on the Supabase project), so these proxy endpoints are OPTIONAL — they
-exist for deployments behind a strict firewall that blocks direct
-Supabase access from the browser.
+on the Supabase project), so the proxy endpoints are a secondary security
+layer for deployments behind a strict firewall. The frontend now also
+attaches the claim token (x-claim-token header) to direct view-retrieval
+calls so the edge function can validate and rate-limit per subscriber.
 """
 
 from __future__ import annotations
@@ -32,11 +32,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import urllib.parse
-from pathlib import Path
+from collections import defaultdict
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -55,6 +56,65 @@ DEFAULT_ANON_KEY = os.environ.get(
     "SUPABASE_ANON_KEY",
     "sb_publishable_cYfseJa9z0qss0g_Y594wA_lXrWVBsa",
 )
+
+
+# ─── Rate limiter ───────────────────────────────────────────────────
+#
+# Simple in-memory sliding-window rate limiter. Each unique (plan_uuid, endpoint)
+# tuple is limited to RATE_LIMIT_MAX requests within RATE_LIMIT_WINDOW seconds.
+# When no plan_uuid is provided (e.g. public views), the client IP from the
+# Request object is used as the key.
+#
+# This prevents a reverse engineer who extracted the anon key + view names from
+# hammering the public views (v_talaria_latest_signals, v_talaria_symbols, etc.)
+# with automated scraping. The anon key is PUBLIC — it cannot read Pro-only
+# views, but the public views are still rate-limited to protect the Supabase
+# project from abuse.
+#
+# TODO: In a multi-worker deployment, replace this with a shared Redis-based
+# limiter. For single-process hermes serve, this is sufficient.
+
+RATE_LIMIT_WINDOW = int(os.environ.get("TALARIA_RATE_LIMIT_WINDOW", "60"))   # seconds
+RATE_LIMIT_MAX = int(os.environ.get("TALARIA_RATE_LIMIT_MAX", "60"))       # requests per window
+_RATE_LIMIT_BUCKET: dict[str, list[float]] = defaultdict(list)
+
+
+def _rate_limit_key(request: Request, plan_uuid: Optional[str] = None) -> str:
+    """Build a rate-limit key from plan_uuid or client IP."""
+    if plan_uuid:
+        return f"plan:{plan_uuid}"
+    # Fall back to client IP for unauthenticated (public view) requests.
+    client_host = getattr(request.client, "host", "unknown")
+    return f"ip:{client_host}"
+
+
+def _check_rate_limit(key: str) -> tuple[bool, int]:
+    """Check if a key is within the rate limit.
+
+    Returns (allowed, retry_after_seconds).
+    """
+    now = time.monotonic()
+    window_start = now - RATE_LIMIT_WINDOW
+    # Prune expired timestamps
+    bucket = _RATE_LIMIT_BUCKET[key]
+    _RATE_LIMIT_BUCKET[key] = [t for t in bucket if t > window_start]
+    bucket = _RATE_LIMIT_BUCKET[key]
+
+    if len(bucket) >= RATE_LIMIT_MAX:
+        oldest_valid = min(bucket)
+        retry_after = int(RATE_LIMIT_WINDOW - (now - oldest_valid)) + 1
+        return False, max(retry_after, 1)
+
+    bucket.append(now)
+    return True, 0
+
+
+def _rate_limited_response(retry_after: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": "Rate limit exceeded"},
+        headers={"Retry-After": str(retry_after), "X-RateLimit-Limit": str(RATE_LIMIT_MAX), "X-RateLimit-Remaining": "0"},
+    )
 
 
 # ─── Health ──────────────────────────────────────────────────────────
@@ -186,12 +246,20 @@ async def claim_check(
 # ─── Symbol list proxy ────────────────────────────────────────────────
 
 @router.get("/symbols")
-async def symbols(plan_uuid: Optional[str] = Query(None)):
+async def symbols(request: Request, plan_uuid: Optional[str] = Query(None)):
     """Proxy: fetch the plan-gated symbol list from Supabase.
 
     GET /api/plugins/talaria/symbols?plan_uuid=<uuid>
-    → forwards to /rest/v1/nt_symbol?select=symbol,asset_class&plan_ids=cs.{uuid}
+    → forwards to /rest/v1/v_talaria_symbols?select=symbol,asset_class&plan_ids=cs.{uuid}
+
+    SECURITY: rate-limited per-plan_uuid (or client IP). The anon key is PUBLIC
+    (RLS read-only), but rate limiting prevents scraping by anyone who reverse-
+    engineers the view name from the browser bundle.
     """
+    rl_key = _rate_limit_key(request, plan_uuid)
+    rl_ok, rl_retry = _check_rate_limit(rl_key)
+    if not rl_ok:
+        return _rate_limited_response(rl_retry)
     if not DEFAULT_ANON_KEY or DEFAULT_ANON_KEY == "***":
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -203,7 +271,7 @@ async def symbols(plan_uuid: Optional[str] = Query(None)):
         params["plan_ids"] = f"cs.({plan_uuid})"
 
     qs = urllib.parse.urlencode(params)
-    url = f"{DEFAULT_SUPABASE_URL.rstrip('/')}/rest/v1/nt_symbol?{qs}"
+    url = f"{DEFAULT_SUPABASE_URL.rstrip('/')}/rest/v1/v_talaria_symbols?{qs}"
 
     import httpx
 
@@ -236,12 +304,21 @@ async def symbols(plan_uuid: Optional[str] = Query(None)):
 # ─── Sweep results proxy ─────────────────────────────────────────────
 
 @router.get("/sweeps/latest")
-async def sweeps_latest(limit: int = Query(200, ge=1, le=1000)):
+async def sweeps_latest(request: Request, limit: int = Query(200, ge=1, le=1000)):
     """Proxy: fetch the latest sweep results.
 
     GET /api/plugins/talaria/sweeps/latest?limit=200
-    → forwards to /rest/v1/nt_sweep_result?...
+    → forwards to /rest/v1/v_talaria_latest_signals?...
+
+    SECURITY: rate-limited per client IP. The anon key is PUBLIC (RLS read-only),
+    but rate limiting prevents automated scraping of the public signal view.
+    Pro-only views (v_paper_equity, v_talaria_portfolio_stats) require a valid
+    claim token and are gated by Supabase RLS — the anon key alone cannot read them.
     """
+    rl_key = _rate_limit_key(request)
+    rl_ok, rl_retry = _check_rate_limit(rl_key)
+    if not rl_ok:
+        return _rate_limited_response(rl_retry)
     if not DEFAULT_ANON_KEY or DEFAULT_ANON_KEY == "***":
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -255,7 +332,7 @@ async def sweeps_latest(limit: int = Query(200, ge=1, le=1000)):
     }
 
     qs = urllib.parse.urlencode(params)
-    url = f"{DEFAULT_SUPABASE_URL.rstrip('/')}/rest/v1/nt_sweep_result?{qs}"
+    url = f"{DEFAULT_SUPABASE_URL.rstrip('/')}/rest/v1/v_talaria_latest_signals?{qs}"
 
     import httpx
 
@@ -288,12 +365,18 @@ async def sweeps_latest(limit: int = Query(200, ge=1, le=1000)):
 # ─── Qualified signal count proxy ─────────────────────────────────────
 
 @router.get("/signals/count")
-async def signals_count(minutes: int = Query(60, ge=1, le=1440)):
+async def signals_count(request: Request, minutes: int = Query(60, ge=1, le=1440)):
     """Proxy: count qualified signals in the last N minutes.
 
     GET /api/plugins/talaria/signals/count?minutes=60
-    → forwards to /rest/v1/nt_sweep_result?...&Prefer: count=exact
+    → forwards to /rest/v1/v_talaria_latest_signals?...&Prefer: count=exact
+
+    SECURITY: rate-limited per client IP (same as /sweeps/latest).
     """
+    rl_key = _rate_limit_key(request)
+    rl_ok, rl_retry = _check_rate_limit(rl_key)
+    if not rl_ok:
+        return _rate_limited_response(rl_retry)
     if not DEFAULT_ANON_KEY or DEFAULT_ANON_KEY == "***":
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -310,7 +393,7 @@ async def signals_count(minutes: int = Query(60, ge=1, le=1440)):
     }
 
     qs = urllib.parse.urlencode(params)
-    url = f"{DEFAULT_SUPABASE_URL.rstrip('/')}/rest/v1/nt_sweep_result?{qs}"
+    url = f"{DEFAULT_SUPABASE_URL.rstrip('/')}/rest/v1/v_talaria_latest_signals?{qs}"
 
     import httpx
 
@@ -340,58 +423,3 @@ async def signals_count(minutes: int = Query(60, ge=1, le=1440)):
 
     count_str = resp.headers.get("X-Total-Count", "0")
     return {"count": int(count_str) if count_str.isdigit() else 0, "minutes": minutes}
-
-
-# ─── Signal cache (agent-readable) ──────────────────────────────────────
-# Writes a JSON snapshot of the latest signal to the OS filesystem so the
-# Hermes agent can read exact entry/SL/TP/Kelly values without DOM scraping
-# or vision OCR. Mounted via the same /api/plugins/talaria/ prefix.
-#
-# Files are NOT created in git — they are runtime caches written to
-# ~/.hermes/talaria/latest_signal.json at runtime.
-
-SIGNAL_CACHE_DIR = Path(os.path.expanduser("~/.hermes/talaria"))
-SIGNAL_CACHE_FILE = SIGNAL_CACHE_DIR / "latest_signal.json"
-
-
-class SignalCacheRequest(BaseModel):
-    symbol: str
-    direction: str
-    kelly: float | None = None
-    regime: str | None = None
-    entry: float | None = None
-    sl: float | None = None
-    tp: float | None = None
-    ts: str | None = None
-    cached_at: str | None = None
-
-
-@router.post("/signal-cache")
-async def write_signal_cache(req: SignalCacheRequest):
-    """Write latest signal data to JSON file on OS filesystem."""
-    try:
-        SIGNAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        data = req.model_dump()
-        SIGNAL_CACHE_FILE.write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
-        log.info(f"Signal cache written: {req.symbol} @ {req.entry}")
-        return JSONResponse({"ok": True, "path": str(SIGNAL_CACHE_FILE)})
-    except Exception as e:
-        log.error(f"Failed to write signal cache: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/signal-cache")
-async def read_signal_cache():
-    """Read latest signal data from JSON file."""
-    try:
-        if not SIGNAL_CACHE_FILE.exists():
-            raise HTTPException(status_code=404, detail="No signal cache found")
-        data = json.loads(SIGNAL_CACHE_FILE.read_text(encoding="utf-8"))
-        return JSONResponse(data)
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error(f"Failed to read signal cache: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

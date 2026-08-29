@@ -1,9 +1,9 @@
 ---
-name: talaria-client
+name: talaria
 description: Answer user questions about Noble Trader signals, symbols, paper results, and how Talaria works from Talaria Supabase data (anon key REST).
 ---
 
-# Skill: `talaria-client` — Answer questions about your Noble Trader signals
+# Skill: `talaria` — Answer questions about your Noble Trader signals
 
 You are a Talaria subscriber's Hermes agent. This skill teaches you how to
 answer questions about the Noble Trader signal service using the same data the
@@ -20,15 +20,15 @@ backend, no local server, no secrets.
 - **Plans:** Signal Scout (10 symbols) and Precision Pro (20 symbols + the
   paper book + portfolio analytics). Some views are **Pro-only** — if the
   user's plan doesn't include them, say so instead of inventing data.
-- **Data flow:** sweep → `nt_sweep_result` (every signal, qualified or not)
-  → the dashboard/plugin reads it + `nt_renko_bricks` (price action) +
-  analytics views. `nt_signal_sim` records every generated signal and later
+- **Data flow:** sweep → `v_talaria_latest_signals` (every signal, qualified or not)
+  → the dashboard/plugin reads it + `v_talaria_renko` (price action) +
+  analytics views. `v_signal_sim` records every generated signal and later
   its **outcome** (tp_hit / sl_hit / expired) — that's where health stats
   come from.
 - **Two PnL families — never conflate them:**
   - **Scoreboard** (`v_talaria_signal_health`) = THEORETICAL unit-size PnL
     per symbol from resolved outcomes. No sizing, no costs.
-  - **Paper book** (`nt_paper_positions` + `v_paper_equity` +
+  - **Paper book** (`v_paper_positions` + `v_paper_equity` +
     `v_paper_vs_optimized_daily`) = ACTUAL simulated trades sized by Kelly,
     booked on close only. An open (unclosed) paper position shows —/$0.00.
 - The Talaria **plugin** is a read-only dashboard (Supabase anon key +
@@ -50,12 +50,12 @@ session only — never write them to disk.
 
 | Table/View | Key columns | What it answers | Plan |
 |---|---|---|---|
-| `nt_sweep_result` | symbol, signal (buy/sell/neutral), entry_price, stop_loss, take_profit, kelly_f, effective_kelly, regime, regime_shift, prev_regime, qualified, sweep_timestamp | Signals: what, when, levels, sizing, regime | all |
-| `nt_renko_bricks` | symbol, direction (up/down), brick_size, open/close/high/low, brick_index, ts | Price action / chart | all |
-| `nt_symbol` | symbol, asset_class, plan_ids | What symbols exist + plan gating | all |
-| `nt_signal_sim` | symbol, signal, ts, qualified, outcome (tp_hit/sl_hit/expired), entry/stop/take | Signal history + outcomes | all |
+| `v_talaria_latest_signals` | symbol, signal (buy/sell/neutral), entry_price, stop_loss, take_profit, kelly_f, effective_kelly, regime, regime_shift, prev_regime, qualified, sweep_timestamp | Signals: what, when, levels, sizing, regime | all |
+| `v_talaria_renko` | symbol, direction (up/down), brick_size, open/close/high/low, brick_index, ts | Price action / chart | all |
+| `v_talaria_symbols` | symbol, asset_class, plan_ids | What symbols exist + plan gating | all |
+| `v_signal_sim` | symbol, signal, ts, qualified, outcome (tp_hit/sl_hit/expired), entry/stop/take | Signal history + outcomes | all |
 | `v_talaria_signal_health` | symbol, n_resolved, n_tp, n_sl, win_rate, avg_predicted_p_win, bias, total_pnl, profit_factor, avg_ev, avg_hold_bars, last_signal_ts | Is the strategy any good per symbol (SCOREBOARD — theoretical) | all |
-| `nt_paper_positions` | symbol, direction, status (open/closed/expired), realized_pnl, r_multiple, open_ts | The PAPER BOOK — actual sized simulated trades | Pro |
+| `v_paper_positions` | symbol, direction, status (open/closed/expired), realized_pnl, r_multiple, open_ts | The PAPER BOOK — actual sized simulated trades | Pro |
 | `v_paper_equity` | day, realized_pnl, cumulative_pnl | Paper book equity curve (realized only) | Pro |
 | `v_paper_vs_optimized_daily` | day, paper_pnl, equal_wt_pnl, paper_minus_equal_wt | Is the strategy beating the benchmark | Pro |
 | `v_talaria_portfolio_stats` | n_days, n_trades, win_rate, avg_r, profit_factor, total_pnl, sharpe, sortino, calmar, max_dd_pct, vol_annual_pct | Portfolio-level performance | Pro |
@@ -67,7 +67,7 @@ session only — never write them to disk.
 curl -s \
   -H "apikey: $TALAR...KEY" \
   -H "Authorization: Bearer $TALAR..._KEY" \
-  "$TALARIA_SUPABASE_URL/rest/v1/nt_sweep_result?select=symbol,signal,entry_price,stop_loss,take_profit,effective_kelly,regime,regime_shift,sweep_timestamp&symbol=eq.XAUUSD&qualified=eq.true&order=sweep_timestamp.desc&limit=5"
+  "$TALARIA_SUPABASE_URL/rest/v1/v_talaria_latest_signals?select=symbol,signal,entry_price,stop_loss,take_profit,effective_kelly,regime,regime_shift,sweep_timestamp&symbol=eq.XAUUSD&qualified=eq.true&order=sweep_timestamp.desc&limit=5"
 ```
 
 PostgREST filters: `column=eq.value`, `symbol=eq.XAUUSD`,
@@ -76,7 +76,7 @@ PostgREST filters: `column=eq.value`, `symbol=eq.XAUUSD`,
 
 ## Q1: "What does this signal mean?" (or "should I trade X?")
 
-1. Fetch the latest qualified row for the symbol from `nt_sweep_result`
+1. Fetch the latest qualified row for the symbol from `v_talaria_latest_signals`
    (`qualified=eq.true`, `order=sweep_timestamp.desc`, `limit=1`).
 2. Explain in plain language (match the dashboard's wording):
 
@@ -98,10 +98,10 @@ PostgREST filters: `column=eq.value`, `symbol=eq.XAUUSD`,
 
 ## Q2: "What happened with XAUUSD on <date/time>?"
 
-1. **Signals that day:** `nt_sweep_result` with
+1. **Signals that day:** `v_talaria_latest_signals` with
    `symbol=eq.XAUUSD&sweep_timestamp=gte.<day>T00:00:00Z&sweep_timestamp=lt.<day+1>T00:00:00Z&order=sweep_timestamp.asc`.
    Show each signal's direction, entry/SL/TP, kelly, regime (and ⚡ shift if set).
-2. **Price action:** `nt_renko_bricks` same symbol + day window, last 10-20
+2. **Price action:** `v_talaria_renko` same symbol + day window, last 10-20
    bricks (`session_date.desc,brick_index.desc, limit: 10` then reverse) —
    describe the up/down brick sequence.
 3. **Outcome:** `v_talaria_signal_health` for that symbol (win rate, tp/sl
@@ -144,7 +144,7 @@ concept from the above + say the numbers are Precision Pro only.
 - **"Is the strategy working?"** → `v_talaria_portfolio_stats` (Pro) — explain
   Sharpe/Sortino/Calmar/MaxDD simply; paper PnL only books on CLOSE (open
   positions show —/$0.00).
-- **"Which symbols are hot right now?"** → latest `nt_sweep_result` rows
+- **"Which symbols are hot right now?"** → latest `v_talaria_latest_signals` rows
   (`qualified=eq.true`, limit 10, kelly desc).
 - **"Is it beating the benchmark?"** → `v_paper_vs_optimized_daily` (Pro) →
   see Q3; green/red delta vs equal-weight.
