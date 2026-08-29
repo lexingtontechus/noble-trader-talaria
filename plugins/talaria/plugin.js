@@ -988,7 +988,7 @@ const POSTHOG_API_HOST = 'https://us.i.posthog.com'
 //        re-renders even on re-seen (ts <= watermark) rows.
 // 0.2.13: (user correction 2026-08-19) fixed wrong workspace path in docs
 // 0.2.14: Phase 2 — in-plugin version check banner (upgrade notice via GitHub Releases API)
-const PLUGIN_VERSION = '0.2.19'
+const PLUGIN_VERSION = '0.2.20'
 
 // ── Built-in service defaults (2026-08-10) ─────────────────────────────────
 // The Supabase project URL + PUBLIC anon key are constants shared by every
