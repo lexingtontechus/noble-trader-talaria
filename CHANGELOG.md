@@ -3,6 +3,25 @@
 All notable changes to the noble-trader-talaria repo are documented here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.2.20] — 2026-08-28
+
+### Summary
+**Security hardening: production table names → view names + claim token validation + rate limiting.** All direct Supabase PostgREST calls now reference view names instead of production table names. The `fetchSupabase()`, `fetchSupabaseCount()`, and `testConnection()` functions now attach an `x-claim-token` header to every view-retrieval call, gating RLS-protected Pro-only views. The dashboard backend API (`plugin_api.py`) proxy endpoints now enforce per-IP/per-plan rate limiting (60 req/min sliding window) to prevent scraping by anyone who reverse-engineers the anon key + view names from the browser bundle.
+
+### Security
+- **Table → View substitution**: All direct Supabase PostgREST calls now reference view names instead of production table names
+  - `nt_sweep_result` → `v_talaria_latest_signals`
+  - `nt_signal_sim` → `v_signal_sim`
+  - `nt_symbol` → `v_talaria_symbols`
+  - `nt_renko_bricks` → `v_talaria_renko`
+  - `nt_paper_positions` → `v_paper_positions`
+- **Claim token validation**: `fetchSupabase()`, `fetchSupabaseCount()`, and `testConnection()` now attach an `x-claim-token` header to every view-retrieval call. The anon key is PUBLIC and read-only via RLS; the claim token gates Pro-only views
+- **Rate limiting**: Dashboard backend API (`plugin_api.py`) proxy endpoints (`/symbols`, `/sweeps/latest`, `/signals/count`) now enforce per-IP/per-plan rate limiting (60 req/min sliding window, configurable via `TALARIA_RATE_LIMIT_WINDOW`/`TALARIA_RATE_LIMIT_MAX` env vars)
+- **Slash command rename**: `talaria-client` → `talaria` (SKILL.md name, related_skills, DEVELOPMENT.md path refs)
+
+### Changed
+- Version: 0.2.18 → 0.2.20 (fixes version drift — root plugin.js was at 0.2.16)
+
 ## [v0.2.19] — 2026-08-26
 
 ### Summary
